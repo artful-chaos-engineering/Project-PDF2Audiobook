@@ -91,8 +91,8 @@ export class PDFExtractor {
     const trimmed = text.trim();
     return (
       trimmed.length < 100 &&
-      (trimmed.match(/^(chapter|part|section)\s+\d+/i) ||
-        trimmed.match(/^[\w\s]+\s{2,}\d+$/) ||
+      (/^(chapter|part|section)\s+\d+/i.test(trimmed) ||
+        /^[\w\s]+\s{2,}\d+$/.test(trimmed) ||
         /^[A-Z\s]{3,50}$/.test(trimmed))
     );
   }
@@ -102,10 +102,10 @@ export class PDFExtractor {
     const trimmed = text.trim();
     return (
       trimmed.length < 80 &&
-      (trimmed.match(/^page\s*\d+/i) ||
+      (/^page\s*\d+/i.test(trimmed) ||
         /^-?\s*\d+\s*-?$/.test(trimmed) ||
-        trimmed.match(/©.*\d{4}/) ||
-        trimmed.match(/www\.|\.com|\.org/))
+        /©.*\d{4}/.test(trimmed) ||
+        /www\.|\.com|\.org/.test(trimmed))
     );
   }
 
@@ -137,7 +137,7 @@ export class PDFExtractor {
     const trimmed = text.trim();
     return (
       /^(references?|bibliography|works\s*cited|citations?)/i.test(trimmed) ||
-      trimmed.match(/^\[[\d\w]+\]\s+(.*)?$/)
+      /^\[[\d\w]+\]\s+(.*)?$/.test(trimmed)
     );
   }
 

@@ -114,7 +114,7 @@ export class ContentCleaner {
     return match ? match[1] : 'unknown';
   }
 
-  private extractFigureTitle(content: string): string {
+  private extractFigureTitle(content: string): string | undefined {
     const match = content.match(/(?:[Ff]ig(?:ure)?|Fig\.?)\s+\d+[:\s]+(.+)/);
     return match ? match[1].trim().slice(0, 100) : undefined;
   }

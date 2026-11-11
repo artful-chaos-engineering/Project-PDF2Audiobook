@@ -2,7 +2,6 @@
   "name": "pdf2audiobook",
   "version": "1.0.0",
   "description": "Convert technical PDFs to audiobooks with narrative-focused content extraction",
-  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -12,9 +11,7 @@
   },
   "dependencies": {
     "pdf-parse": "^1.1.1",
-    "pdfjs-dist": "^4.0.379",
-    "google-tts-api": "^0.0.7",
-    "elevenlabs": "^0.2.0"
+    "pdfjs-dist": "^4.0.379"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
