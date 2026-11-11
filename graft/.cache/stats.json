@@ -1,14 +1,14 @@
 {
-  "nodeCount": 96,
-  "edgeCount": 207,
+  "nodeCount": 98,
+  "edgeCount": 215,
   "languages": [
     "typescript"
   ],
-  "totalCount": 96,
+  "totalCount": 98,
   "readyCount": 0,
-  "staleCount": 0,
+  "staleCount": 4,
   "dirty": true,
   "syncing": false,
-  "syncedAt": "2026-11-11T18:54:05.505Z",
-  "lastFile": "real-pdf-test.ts"
+  "syncedAt": "2026-11-11T19:13:30.221Z",
+  "lastFile": "contentCleaner.ts"
 }

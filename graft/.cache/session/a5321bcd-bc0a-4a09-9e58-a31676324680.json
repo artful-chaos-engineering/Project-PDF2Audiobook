@@ -2,12 +2,12 @@
   "lastQuery": "/goal \n\n<pasted_content id=\"4e3a\">\nI want to convert a technical PDF book into an audiobook with real voices.  I want to skip content that breaks the narrative, including:\nheaders\nfooter\ntable of contents\ntable headings and table data (just summarize what the table says briefly: Table XXX in the text shows <1-3 sentences>\nfigure headings and figure data (just summarize what the table says briefly, Figure XXX in the text shows <1-3 sentences>\nreferences\nglossary\nother non-essential text\n</pasted_content id=\"4e3a\">",
   "perAgentQuery": {},
   "graftReads": 0,
-  "sourceReads": 15,
+  "sourceReads": 16,
   "savedTokens": 0,
   "injectedPointers": [],
   "nudges": 0,
   "host": "claude-code",
-  "inputCostMicros": 2654477,
-  "inputTokensBilled": 24126943,
-  "lastBillingUuid": "ce4dce42-3b8d-4df6-92bf-200ada49cc46"
+  "inputCostMicros": 3625769,
+  "inputTokensBilled": 33177295,
+  "lastBillingUuid": "d562a0fd-19fe-471e-b583-30ffbd360e63"
 }

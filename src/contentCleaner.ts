@@ -65,43 +65,59 @@ export class ContentCleaner {
   }
 
   private summarizeTable(content: string, pageNum: number): string {
-    // Extract key information from table
-    const lines = content.split('\n').filter(l => l.trim().length > 0).slice(0, 10);
-    const headers = this.extractTableHeaders(content);
+    const lines = content.split('\n').filter(l => l.trim().length > 2);
 
-    if (headers.length > 0) {
-      const headerList = headers.slice(0, 4).join(', ');
-      return `a data table with ${headers.length} columns${headers.length > 4 ? ` including: ${headerList}` : ': ' + headerList}`;
+    if (lines.length < 2) return 'a data table';
+
+    // Get header line (usually first line)
+    const headerLine = lines[0].toLowerCase();
+    const dataLines = lines.slice(1, 5);
+
+    // Count actual columns (split by multiple spaces or tabs)
+    const columnCount = (lines[0].match(/\s{2,}|\t/g) || []).length + 1;
+
+    // Detect content type
+    const hasPercentages = /\d+%/.test(content);
+    const hasVeryHighNumbers = /\d{4,}/.test(content);
+    const firstDataLine = dataLines[0] || '';
+
+    // Generate specific summary
+    let summary = '';
+
+    if (hasPercentages) {
+      summary = `a comparison table with ${Math.max(2, columnCount)} columns showing percentage data.`;
+    } else if (hasVeryHighNumbers) {
+      summary = `a data table with ${Math.max(2, columnCount)} columns containing numerical statistics.`;
+    } else if (headerLine.includes('algorithm') || headerLine.includes('method')) {
+      summary = `a comparison table evaluating different algorithms or methods across multiple metrics.`;
+    } else if (columnCount > 3) {
+      summary = `a comprehensive data table with ${columnCount} columns containing various measurements.`;
+    } else {
+      summary = `a data table with ${Math.max(2, columnCount)} columns of structured information.`;
     }
 
-    // Try to infer table contents from text patterns
-    const hasNumericData = /\d+([,.]?\d+)?/.test(content);
-    const hasPercentages = /%/.test(content);
-
-    if (hasNumericData && hasPercentages) {
-      return 'a statistical data table with percentages';
-    } else if (hasNumericData) {
-      return 'a numerical data table';
-    }
-
-    return 'a data table';
+    return summary;
   }
 
   private summarizeFigure(content: string, pageNum: number): string {
-    // Extract figure caption or description
-    const captionMatch = content.match(/(?:caption|figure|fig\.?)[:\s]+(.+?)(?:\n|$)/i);
-    if (captionMatch) {
-      const summary = captionMatch[1].trim();
-      return summary.length > 150 ? summary.slice(0, 147) + '...' : summary;
-    }
+    // Clean up the content (remove "Figure X:" prefix)
+    let text = content.replace(/^[Ff]igure\s+\d+[:\s]+/i, '').trim();
 
-    // Look for descriptive text
-    const descMatch = content.match(/shows?[:\s]+(.+?)(?:\n|$)/i);
-    if (descMatch) {
-      return descMatch[1].trim().slice(0, 150);
-    }
+    // If still starts with "Figure X:" or numbers, skip that
+    text = text.replace(/^\d+[:\s]+/, '').trim();
 
-    return 'a diagram or illustration';
+    if (!text) return 'a diagram illustrating the concept';
+
+    // Generate 1-3 sentence summary based on content
+    if (text.length > 200) {
+      return text.slice(0, 150).trim() + '...';
+    } else if (text.includes('show') || text.includes('display')) {
+      return text.slice(0, 180);
+    } else if (text.length > 80) {
+      return text;
+    } else {
+      return text + ' This visualization illustrates key concepts from the material.';
+    }
   }
 
   private extractTableNumber(content: string): string {
