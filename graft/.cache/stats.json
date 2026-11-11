@@ -6,9 +6,9 @@
   ],
   "totalCount": 103,
   "readyCount": 0,
-  "staleCount": 0,
+  "staleCount": 3,
   "dirty": true,
   "syncing": false,
-  "syncedAt": "2026-11-11T19:42:55.538Z",
+  "syncedAt": "2026-11-11T19:45:23.838Z",
   "lastFile": "contentCleaner.ts"
 }
