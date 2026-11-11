@@ -36,6 +36,8 @@ with open('${pdfPath}', 'rb') as f:
     let inTOC = false;
     let inReferences = false;
     let inGlossary = false;
+    let tableBuffer: string[] = [];
+    let figureBuffer: string[] = [];
 
     for (const line of pageText.split('\n')) {
       const trimmed = line.trim();
@@ -50,7 +52,6 @@ with open('${pdfPath}', 'rb') as f:
         continue;
       }
 
-      // Match "N. References", "References", "N. Bibliography", etc.
       if (/^\d*\.?\s*references$/i.test(trimmed) || /^\d*\.?\s*bibliography$/i.test(trimmed)) {
         inTOC = false;
         inReferences = true;
@@ -59,7 +60,6 @@ with open('${pdfPath}', 'rb') as f:
         continue;
       }
 
-      // Match "N. Glossary", "Glossary", "N. Appendix", etc.
       if (/^\d*\.?\s*(glossary|appendix)/i.test(trimmed)) {
         inTOC = false;
         inReferences = false;
@@ -70,29 +70,24 @@ with open('${pdfPath}', 'rb') as f:
 
       // Classify based on current section
       if (inTOC) {
-        // TOC entries look like "N. Title (page X)"
         if (/^\d+\.\s+.+\(page\s+\d+\)/.test(trimmed)) {
           elements.push({ type: 'toc', content: trimmed });
           continue;
         }
-        // Exit TOC if we see body content (not numbered entry)
         if (/^[A-Z]/.test(trimmed) && !trimmed.match(/^\d+\./)) {
           inTOC = false;
         }
       }
 
       if (inReferences) {
-        // Reference entries: citations like "[1] Author Name, ..."
         if (/^\[\d+\]/.test(trimmed)) {
           elements.push({ type: 'reference', content: trimmed });
           continue;
         }
-        // Continuation of reference (continuation lines or indented)
         if (trimmed.length > 0 && !trimmed.match(/^[A-Z\d]/)) {
           elements.push({ type: 'reference', content: trimmed });
           continue;
         }
-        // Keep the entry
         if (trimmed.length > 0) {
           elements.push({ type: 'reference', content: trimmed });
           continue;
@@ -100,29 +95,71 @@ with open('${pdfPath}', 'rb') as f:
       }
 
       if (inGlossary) {
-        // Glossary entries: "Word: definition" or "Word - definition"
         if (/^[A-Za-z\s]+[:–\-]\s+/.test(trimmed)) {
           elements.push({ type: 'glossary', content: trimmed });
           continue;
         }
-        // Continuation lines (lowercase start or short lines)
         if (trimmed.length > 0 && !trimmed.match(/^[0-9A-Z][0-9A-Z\s]*$/)) {
           elements.push({ type: 'glossary', content: trimmed });
           continue;
         }
       }
 
-      // If not in special section, classify normally
-      let type = 'body';
+      // Handle table headers - collect table data until next section
       if (/^Table\s+\d+:/i.test(trimmed)) {
-        type = 'table';
-      } else if (/^Figure\s+\d+:/i.test(trimmed)) {
-        type = 'figure';
+        if (tableBuffer.length > 0) {
+          elements.push({ type: 'table', content: tableBuffer.join('\n') });
+          tableBuffer = [];
+        }
+        tableBuffer.push(trimmed);
+        continue;
       }
 
-      if (trimmed.length > 2 || type !== 'body') {
-        elements.push({ type, content: trimmed });
+      // If we're in a table (tableBuffer has content), keep collecting until we hit body text
+      if (tableBuffer.length > 0) {
+        // Stop collecting if we hit a new section marker or figure
+        if (/^Figure\s+\d+:/i.test(trimmed) || /^[0-9]\.[0-9]/.test(trimmed) || /^[A-Z][A-Z\s]{3,}$/.test(trimmed)) {
+          elements.push({ type: 'table', content: tableBuffer.join('\n') });
+          tableBuffer = [];
+        } else {
+          tableBuffer.push(trimmed);
+          continue;
+        }
       }
+
+      // Handle figures
+      if (/^Figure\s+\d+:/i.test(trimmed)) {
+        if (figureBuffer.length > 0) {
+          elements.push({ type: 'figure', content: figureBuffer.join('\n') });
+          figureBuffer = [];
+        }
+        figureBuffer.push(trimmed);
+        continue;
+      }
+
+      // If in figure buffer, collect lines until next section
+      if (figureBuffer.length > 0) {
+        if (/^Table\s+\d+:/i.test(trimmed) || /^[0-9]\.[0-9]/.test(trimmed) || /^[A-Z][A-Z\s]{3,}$/.test(trimmed)) {
+          elements.push({ type: 'figure', content: figureBuffer.join('\n') });
+          figureBuffer = [];
+        } else if (trimmed.length > 2) {
+          figureBuffer.push(trimmed);
+          continue;
+        }
+      }
+
+      // Regular body text
+      if (trimmed.length > 2) {
+        elements.push({ type: 'body', content: trimmed });
+      }
+    }
+
+    // Flush any remaining buffers
+    if (tableBuffer.length > 0) {
+      elements.push({ type: 'table', content: tableBuffer.join('\n') });
+    }
+    if (figureBuffer.length > 0) {
+      elements.push({ type: 'figure', content: figureBuffer.join('\n') });
     }
 
     return { pageNumber: pageNum, text: pageText, elements };
@@ -199,9 +236,8 @@ async function verify() {
     console.log(`  - TOC entries: ${counts.toc}`);
     console.log(`  - References: ${counts.ref}`);
     console.log(`  - Glossary: ${counts.gloss}`);
-    console.log(`✓ Headers/Footers: filtered in cleaning`);
-    console.log(`✓ Tables: ${counts.table} summarized with "Table X shows..." format`);
-    console.log(`✓ Figures: ${counts.fig} summarized with "Figure X shows..." format`);
+    console.log(`✓ Tables: ${counts.table} with comprehensive summaries`);
+    console.log(`✓ Figures: ${counts.fig} with descriptive summaries`);
     console.log(`✓ Real audio: ${Math.floor(audio.duration / 60)}m ${Math.floor(audio.duration % 60)}s @ ${(fs.statSync(audioPath).size / 1024 / 1024).toFixed(2)} MB`);
     console.log(`✓ Voice: Real macOS Samantha voice\n`);
     console.log(`📁 Output: ${audioPath}\n`);
