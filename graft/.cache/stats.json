@@ -6,9 +6,9 @@
   ],
   "totalCount": 72,
   "readyCount": 0,
-  "staleCount": 11,
+  "staleCount": 21,
   "dirty": true,
   "syncing": false,
   "syncedAt": "2026-11-11T18:42:55.622Z",
-  "lastFile": "tsconfig.json"
+  "lastFile": "audio-demo.ts"
 }

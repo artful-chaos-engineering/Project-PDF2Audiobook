@@ -1,0 +1,14 @@
+{
+  "title": "Machine Learning Fundamentals",
+  "author": "Test Author",
+  "duration": 1800,
+  "durationFormatted": "30m 0s",
+  "textLength": 2570,
+  "characterCount": 2570,
+  "estimatedReadingTime": 13,
+  "voice": "bella",
+  "voiceProvider": "elevenlabs",
+  "language": "en",
+  "createdAt": "2026-11-11T18:45:17.718Z",
+  "estimatedWordCount": 514
+}
