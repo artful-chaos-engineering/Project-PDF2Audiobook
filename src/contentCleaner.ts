@@ -16,7 +16,7 @@ export class ContentCleaner {
             break;
 
           case 'table':
-            const tableSummary = this.summarizeTable(element.content, page.pageNumber);
+            const tableSummary = this.summarizeTable(element.content);
             summaries.push({
               type: 'table',
               number: this.extractTableNumber(element.content),
@@ -26,7 +26,7 @@ export class ContentCleaner {
             break;
 
           case 'figure':
-            const figureSummary = this.summarizeFigure(element.content, page.pageNumber);
+            const figureSummary = this.summarizeFigure(element.content);
             summaries.push({
               type: 'figure',
               number: this.extractFigureNumber(element.content),
@@ -59,47 +59,64 @@ export class ContentCleaner {
     };
   }
 
-  private summarizeTable(content: string, pageNum: number): string {
-    const lines = content.split('\n').filter(l => l.trim().length > 2);
+  private summarizeTable(content: string): string {
+    const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length < 2) return `a reference table`;
 
-    if (lines.length < 2) {
-      return `a reference table with key data`;
+    const titleLine = lines[0];
+    const title = titleLine.replace(/^Table\s+\d+[:\s]+/i, '').trim();
+
+    // Find header row (contains Algorithm, Type, Accuracy, etc.)
+    let headerRowIndex = -1;
+    for (let i = 1; i < Math.min(6, lines.length); i++) {
+      if (/algorithm|type|accuracy|speed|memory|use case/i.test(lines[i])) {
+        headerRowIndex = i;
+        break;
+      }
     }
 
-    const titleMatch = content.match(/^[Tt]able\s+\d+[:\s]+(.+?)(?:\n|$)/i);
-    const title = titleMatch ? titleMatch[1].trim() : '';
+    // Count algorithm names (Algo names typically: Decision, Random, Neural, Linear, Logistic, SVM, etc.)
+    let algoCount = 0;
+    const algoPattern = /^(decision|random|neural|linear|logistic|svm|tree|forest|network|regression|gradient|naive|support vector)/i;
+    for (let i = (headerRowIndex > 0 ? headerRowIndex + 1 : 1); i < lines.length; i++) {
+      if (algoPattern.test(lines[i])) {
+        algoCount++;
+      }
+    }
+    if (algoCount === 0) algoCount = Math.max(2, lines.length - 2);
 
+    // Determine table type
     const fullContent = content.toLowerCase();
     const hasPercentages = /\d+%/.test(content);
-    const hasAlgorithms = /algorithm|method|model|tree|forest|network|regression/i.test(content);
-    const hasMetrics = /accuracy|speed|memory|performance|complexity|time/i.test(content);
-    
-    const dataLines = lines.slice(1);
-    const rowCount = Math.max(2, dataLines.length);
+    const hasAlgorithms = /algorithm|regression|decision|forest|network/i.test(content);
+    const hasMetrics = /accuracy|speed|memory/i.test(content);
+    const hasTypes = /type|classification|prediction/i.test(content);
 
     if (hasAlgorithms && hasMetrics) {
-      return `a comparison of ${rowCount} algorithms with performance metrics including accuracy, speed, and memory usage`;
-    } else if (title.toLowerCase().includes('comparison')) {
-      return `a comparison table with ${rowCount} entries evaluated across multiple dimensions`;
+      return `a comparison of ${algoCount} machine learning algorithms showing accuracy, speed, and memory performance`;
+    } else if (hasAlgorithms && hasTypes) {
+      return `a table comparing ${algoCount} algorithms with their type and use case`;
     } else if (hasPercentages) {
-      return `a data table with percentages and statistics across ${rowCount} categories`;
-    } else if (hasMetrics) {
-      return `a metrics table showing performance indicators for ${rowCount} items`;
-    } else if (rowCount > 5) {
-      return `a reference table containing ${rowCount} entries of structured data`;
+      return `a data table with ${algoCount} rows showing percentages`;
     } else {
-      return `a ${rowCount}-row table organizing related data for easy reference`;
+      return `a ${algoCount}-row comparison table`;
     }
   }
 
-  private summarizeFigure(content: string, pageNum: number): string {
-    let caption = content.replace(/^[Ff]igure\s+\d+[:\s]+/i, '').trim();
-    caption = caption.replace(/^\d+[:\s]+/, '').trim();
-
-    if (!caption || caption.length < 3) {
-      return `a diagram illustrating key concepts`;
+  private summarizeFigure(content: string): string {
+    const parts = content.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0);
+    
+    if (parts.length === 0) return `a diagram`;
+    
+    // Remove "Figure N:" prefix from first part
+    let caption = parts[0].replace(/^Figure\s+\d+[:\s]+/i, '').trim();
+    
+    // If there are description lines (parts[1], parts[2], etc.), combine them as the description
+    if (parts.length > 1) {
+      const description = parts.slice(1).join(' ').trim();
+      return `${caption} ${description}`;
     }
-
+    
     return caption;
   }
 
@@ -114,13 +131,8 @@ export class ContentCleaner {
   }
 
   private extractFigureTitle(content: string): string | undefined {
-    const match = content.match(/(?:[Ff]ig(?:ure)?|Fig\.?)\s+\d+[:\s]+(.+)/);
-    if (match) {
-      const title = match[1].trim();
-      const cleanTitle = title.replace(/^\d+[:\s]+/, '');
-      return cleanTitle.length > 0 ? cleanTitle.slice(0, 100) : undefined;
-    }
-    return undefined;
+    const match = content.match(/(?:[Ff]ig(?:ure)?|Fig\.?)\s+\d+[:\s]+([^\n]+)/);
+    return match ? match[1].trim().slice(0, 100) : undefined;
   }
 
   private formatSummaryInsertion(summary: TableFigureSummary): string {
@@ -130,12 +142,10 @@ export class ContentCleaner {
 
   private insertSummary(text: string, insertion: string, position: number): string {
     const paragraphs = text.split('\n\n');
-
     if (position > 0 && position <= paragraphs.length) {
       paragraphs.splice(position, 0, insertion);
       return paragraphs.join('\n\n');
     }
-
     return text + '\n\n' + insertion;
   }
 

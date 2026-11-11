@@ -1,14 +1,14 @@
 {
-  "nodeCount": 103,
-  "edgeCount": 243,
+  "nodeCount": 102,
+  "edgeCount": 242,
   "languages": [
     "typescript"
   ],
-  "totalCount": 103,
+  "totalCount": 102,
   "readyCount": 0,
-  "staleCount": 3,
-  "dirty": true,
+  "staleCount": 0,
+  "dirty": false,
   "syncing": false,
-  "syncedAt": "2026-11-11T19:45:23.838Z",
+  "syncedAt": "2026-11-11T19:47:38.234Z",
   "lastFile": "contentCleaner.ts"
 }
