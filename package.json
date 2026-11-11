@@ -1,0 +1,25 @@
+{
+  "name": "pdf2audiobook",
+  "version": "1.0.0",
+  "description": "Convert technical PDFs to audiobooks with narrative-focused content extraction",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^4.0.379",
+    "google-tts-api": "^0.0.7",
+    "elevenlabs": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0",
+    "tsx": "^4.0.0"
+  }
+}
