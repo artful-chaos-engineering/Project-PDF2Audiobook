@@ -45,23 +45,36 @@ function parseArguments(args: string[]): AudiobookConfig | null {
       const provider = args[++i];
       if (['elevenlabs', 'google', 'azure'].includes(provider)) {
         config.voiceProvider = provider as 'elevenlabs' | 'google' | 'azure';
+      } else {
+        console.error(`Error: Unknown provider "${provider}". Use: elevenlabs, google, or azure`);
+        return null;
       }
     } else if (arg === '--voice' || arg === '-v') {
       config.voice = args[++i];
     } else if (arg === '--language' || arg === '-l') {
       config.language = args[++i];
     } else if (arg === '--speed' || arg === '-s') {
-      config.speed = parseFloat(args[++i]);
+      const speed = parseFloat(args[++i]);
+      if (isNaN(speed) || speed < 0.5 || speed > 2.0) {
+        console.error('Error: Speed must be between 0.5 and 2.0');
+        return null;
+      }
+      config.speed = speed;
     } else if (arg === '--help' || arg === '-h') {
       printUsage();
       return null;
     } else if (!arg.startsWith('-') && !pdfPath) {
       pdfPath = arg;
+    } else if (arg.startsWith('-')) {
+      console.error(`Error: Unknown option "${arg}". Use --help for usage.`);
+      return null;
     }
   }
 
   if (!pdfPath) {
     console.error('Error: PDF path is required');
+    console.error('Use: pdf2audiobook <pdf-path> [options]');
+    console.error('Use: pdf2audiobook --help for full usage information');
     return null;
   }
 

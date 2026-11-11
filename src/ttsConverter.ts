@@ -19,28 +19,43 @@ export class ElevenLabsTTS implements TTSProvider {
     const voice = config.voice || 'bella';
     const voiceId = this.getVoiceId(voice);
 
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-      method: 'POST',
-      headers: {
-        'xi-api-key': this.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        text,
-        model_id: 'eleven_monolingual_v1',
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75,
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': this.apiKey,
+          'Content-Type': 'application/json',
         },
-        language_code: config.language || 'en-US',
-      }),
-    });
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_monolingual_v1',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+          },
+          language_code: config.language || 'en-US',
+        }),
+      });
 
-    if (!response.ok) {
-      throw new Error(`ElevenLabs API error: ${response.statusText}`);
+      if (!response.ok) {
+        const errorData = await response.text().catch(() => '');
+        if (response.status === 401) {
+          throw new Error('ElevenLabs API key is invalid. Check ELEVENLABS_API_KEY environment variable.');
+        } else if (response.status === 429) {
+          throw new Error('ElevenLabs API rate limit exceeded. Try again later.');
+        } else if (response.status === 400) {
+          throw new Error(`ElevenLabs API error: ${errorData || response.statusText}`);
+        }
+        throw new Error(`ElevenLabs API error: ${response.statusText}`);
+      }
+
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
+        throw new Error('Network error: Cannot connect to ElevenLabs API. Check your internet connection.');
+      }
+      throw error;
     }
-
-    return Buffer.from(await response.arrayBuffer());
   }
 
   async getAvailableVoices(): Promise<string[]> {
@@ -80,33 +95,45 @@ export class GoogleTTS implements TTSProvider {
   }
 
   async synthesize(text: string, config: AudiobookConfig): Promise<Buffer> {
-    const response = await fetch(
-      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${this.apiKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          input: { text },
-          voice: {
-            languageCode: config.language || 'en-US',
-            name: config.voice || 'en-US-Neural2-A',
+    try {
+      const response = await fetch(
+        `https://texttospeech.googleapis.com/v1/text:synthesize?key=${this.apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-          audioConfig: {
-            audioEncoding: 'MP3',
-            speakingRate: config.speed || 1.0,
-          },
-        }),
+          body: JSON.stringify({
+            input: { text },
+            voice: {
+              languageCode: config.language || 'en-US',
+              name: config.voice || 'en-US-Neural2-A',
+            },
+            audioConfig: {
+              audioEncoding: 'MP3',
+              speakingRate: config.speed || 1.0,
+            },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Google API key is invalid. Check GOOGLE_API_KEY environment variable.');
+        } else if (response.status === 429) {
+          throw new Error('Google API rate limit exceeded. Try again later.');
+        }
+        throw new Error(`Google TTS API error: ${response.statusText}`);
       }
-    );
 
-    if (!response.ok) {
-      throw new Error(`Google TTS API error: ${response.statusText}`);
+      const data = await response.json() as { audioContent: string };
+      return Buffer.from(data.audioContent, 'base64');
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
+        throw new Error('Network error: Cannot connect to Google TTS API. Check your internet connection.');
+      }
+      throw error;
     }
-
-    const data = await response.json() as { audioContent: string };
-    return Buffer.from(data.audioContent, 'base64');
   }
 
   async getAvailableVoices(): Promise<string[]> {

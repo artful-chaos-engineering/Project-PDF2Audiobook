@@ -71,12 +71,28 @@ export class AudiobookGenerator {
   }
 
   private validateConfig(): void {
+    if (!this.config.pdfPath) {
+      throw new Error('PDF path must be specified');
+    }
+
     if (!fs.existsSync(this.config.pdfPath)) {
-      throw new Error(`PDF file not found: ${this.config.pdfPath}`);
+      throw new Error(`PDF file not found: ${this.config.pdfPath}\n\nMake sure the file exists and the path is correct.`);
+    }
+
+    if (!fs.statSync(this.config.pdfPath).isFile()) {
+      throw new Error(`PDF path is not a file: ${this.config.pdfPath}`);
     }
 
     if (!this.config.voiceProvider) {
-      throw new Error('Voice provider must be specified');
+      throw new Error('Voice provider must be specified (elevenlabs, google, or azure)');
+    }
+
+    if (this.config.speed && (this.config.speed < 0.5 || this.config.speed > 2.0)) {
+      throw new Error('Speed must be between 0.5 and 2.0');
+    }
+
+    if (this.config.language && !/^[a-z]{2}(-[A-Z]{2})?$/.test(this.config.language)) {
+      throw new Error(`Invalid language code: ${this.config.language} (use en, en-US, etc.)`);
     }
   }
 
