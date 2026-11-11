@@ -42,7 +42,7 @@ with open('${pdfPath}', 'rb') as f:
       const trimmed = line.trim();
       if (!trimmed) continue;
 
-      if (/^table\s+of\s+contents$/i.test(trimmed) || /^contents$/i.test(trimmed)) {
+      if (/^table\s+of\s+contents$/i.test(trimmed)) {
         inTOC = true; inReferences = false; inGlossary = false;
         elements.push({ type: 'toc', content: trimmed });
         continue;
@@ -106,9 +106,17 @@ with open('${pdfPath}', 'rb') as f:
         }
       }
 
-      // Handle figures - CAPTION ONLY (no body text)
+      // Handle figures - caption + next 1-2 lines of description
       if (/^Figure\s+\d+:/i.test(trimmed)) {
-        elements.push({ type: 'figure', content: trimmed });
+        const figContent = [trimmed];
+        for (let j = i + 1; j < Math.min(i + 3, allLines.length); j++) {
+          const nextLine = allLines[j].trim();
+          if (!nextLine) break;
+          if (/^\d+\.\d+/.test(nextLine) || /^Table/.test(nextLine)) break;
+          figContent.push(nextLine);
+          i = j;
+        }
+        elements.push({ type: 'figure', content: figContent.join(' ') });
         continue;
       }
 
@@ -116,7 +124,6 @@ with open('${pdfPath}', 'rb') as f:
     }
 
     if (tableBuffer.length > 0) { elements.push({ type: 'table', content: tableBuffer.join('\n') }); }
-
     return { pageNumber: pageNum, text: pageText, elements };
   });
 
@@ -124,65 +131,70 @@ with open('${pdfPath}', 'rb') as f:
 }
 
 async function verify() {
-  console.log('✅ FINAL VERIFICATION\n');
+  const extracted = extractPDFDirect('/private/tmp/technical-book.pdf');
 
-  try {
-    const extracted = extractPDFDirect('/private/tmp/technical-book.pdf');
-
-    let counts = { toc: 0, ref: 0, gloss: 0, table: 0, fig: 0, body: 0 };
-    for (const p of extracted.pages) {
-      for (const e of p.elements) {
-        if (e.type === 'toc') counts.toc++;
-        else if (e.type === 'reference') counts.ref++;
-        else if (e.type === 'glossary') counts.gloss++;
-        else if (e.type === 'table') counts.table++;
-        else if (e.type === 'figure') counts.fig++;
-        else counts.body++;
-      }
+  let counts = { toc: 0, ref: 0, gloss: 0, table: 0, fig: 0, body: 0, header: 0, footer: 0 };
+  for (const p of extracted.pages) {
+    for (const e of p.elements) {
+      if (e.type === 'toc') counts.toc++;
+      else if (e.type === 'reference') counts.ref++;
+      else if (e.type === 'glossary') counts.gloss++;
+      else if (e.type === 'table') counts.table++;
+      else if (e.type === 'figure') counts.fig++;
+      else if (e.type === 'header') counts.header++;
+      else if (e.type === 'footer') counts.footer++;
+      else counts.body++;
     }
-
-    console.log('ELEMENTS:');
-    console.log(`✓ TOC: ${counts.toc} | References: ${counts.ref} | Glossary: ${counts.gloss}`);
-    console.log(`✓ Tables: ${counts.table} | Figures: ${counts.fig} | Body: ${counts.body}\n`);
-
-    const cleaner = new ContentCleaner();
-    const cleaned = await cleaner.clean(extracted);
-
-    console.log('FILTERING:');
-    console.log(`✓ Non-narrative removed: ${counts.toc + counts.ref + counts.gloss}`);
-    console.log(`✓ Narrative: ${cleaned.narrativeText.length} chars`);
-    console.log(`✓ Summaries: ${cleaned.summaries.length}\n`);
-
-    console.log('SUMMARIES:');
-    for (const s of cleaned.summaries) {
-      console.log(`${s.type.toUpperCase()} ${s.number}: "${s.summary}"`);
-    }
-    console.log();
-
-    const config: AudiobookConfig = {
-      pdfPath: '/private/tmp/technical-book.pdf',
-      outputPath: path.join(process.cwd(), 'final.wav'),
-      voiceProvider: 'mac',
-      voice: 'Samantha',
-    };
-
-    const conv = new TTSConverter(config);
-    const audio = await conv.convertToAudio(cleaned.narrativeText, config);
-
-    const outDir = path.join(process.cwd(), 'verified');
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-    const audioPath = path.join(outDir, 'audiobook.wav');
-    fs.writeFileSync(audioPath, audio.audio);
-
-    console.log('AUDIO:');
-    console.log(`✓ Duration: ${Math.floor(audio.duration / 60)}m ${Math.floor(audio.duration % 60)}s`);
-    console.log(`✓ File: ${(fs.statSync(audioPath).size / 1024 / 1024).toFixed(2)} MB AIFF-C\n`);
-
-    return true;
-  } catch (e) {
-    console.error('ERROR:', e);
-    return false;
   }
+
+  const cleaner = new ContentCleaner();
+  const cleaned = await cleaner.clean(extracted);
+
+  console.log('✅ PDF CONVERSION VERIFICATION\n');
+  console.log('EXTRACTION:');
+  console.log(`✓ Pages: ${extracted.pages.length}`);
+  console.log(`✓ Headers detected: ${counts.header}`);
+  console.log(`✓ Footers detected: ${counts.footer}`);
+  console.log(`✓ TOC: ${counts.toc}`);
+  console.log(`✓ References: ${counts.ref}`);
+  console.log(`✓ Glossary: ${counts.gloss}`);
+  console.log(`✓ Tables: ${counts.table} | Figures: ${counts.fig}`);
+
+  console.log('\nFILTERING:');
+  console.log(`✓ Non-narrative removed: ${counts.toc + counts.ref + counts.gloss}`);
+  const narr = cleaned.narrativeText.toLowerCase();
+  console.log(`✓ References removed: ${!narr.includes('references')}`);
+  console.log(`✓ Glossary removed: ${!narr.includes('glossary')}`);
+
+  console.log('\nSUMMARIES (1-3 sentences):');
+  for (const s of cleaned.summaries) {
+    const type = s.type === 'table' ? 'Table' : 'Figure';
+    console.log(`\n${type} ${s.number}:`);
+    console.log(`  "${s.summary}"`);
+  }
+
+  const config: AudiobookConfig = {
+    pdfPath: '/private/tmp/technical-book.pdf',
+    outputPath: path.join(process.cwd(), 'final.wav'),
+    voiceProvider: 'mac',
+    voice: 'Samantha',
+  };
+
+  const conv = new TTSConverter(config);
+  const audio = await conv.convertToAudio(cleaned.narrativeText, config);
+
+  const outDir = path.join(process.cwd(), 'verified');
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+  const audioPath = path.join(outDir, 'audiobook.wav');
+  fs.writeFileSync(audioPath, audio.audio);
+
+  console.log('\nAUDIO OUTPUT:');
+  console.log(`✓ Duration: ${Math.floor(audio.duration / 60)}m ${Math.floor(audio.duration % 60)}s`);
+  console.log(`✓ Voice: Samantha (real macOS voice)`);
+  console.log(`✓ File: ${audioPath}`);
+  console.log(`✓ Size: ${(fs.statSync(audioPath).size / 1024 / 1024).toFixed(2)} MB`);
+
+  return true;
 }
 
-verify().then((ok: boolean) => process.exit(ok ? 0 : 1));
+verify().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
