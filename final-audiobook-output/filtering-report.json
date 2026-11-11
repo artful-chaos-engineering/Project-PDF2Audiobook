@@ -1,0 +1,53 @@
+{
+  "title": "Complete Pipeline Test Results",
+  "timestamp": "2026-11-11T18:53:47.802Z",
+  "pdf": {
+    "pages": 4,
+    "rawElements": 19,
+    "elementBreakdown": {
+      "header": 1,
+      "footer": 1,
+      "toc": 1,
+      "heading": 4,
+      "body": 7,
+      "table": 2,
+      "figure": 1,
+      "reference": 1,
+      "glossary": 1
+    }
+  },
+  "filtering": {
+    "headersRemoved": 1,
+    "footersRemoved": 1,
+    "tocRemoved": 1,
+    "referencesRemoved": 1,
+    "glossaryRemoved": 1,
+    "narrativeTextLength": 545,
+    "tableSummariesGenerated": 2,
+    "figureSummariesGenerated": 1,
+    "tableDetails": [
+      {
+        "number": "1",
+        "summary": "a data table with 1 columns: Table 1: ML Algorithm Comparison"
+      },
+      {
+        "number": "2",
+        "summary": "a data table with 1 columns: Table 2: Supervised Learning Algorithms"
+      }
+    ],
+    "figureDetails": [
+      {
+        "number": "1",
+        "summary": "1: The Machine Learning Pipeline"
+      }
+    ]
+  },
+  "audio": {
+    "voice": "Victoria",
+    "provider": "macOS System Speech",
+    "durationSeconds": 54.5,
+    "durationFormatted": "0m 54s",
+    "fileSizeMB": "1.31",
+    "fileType": "AIFF-C (professional audio format)"
+  }
+}

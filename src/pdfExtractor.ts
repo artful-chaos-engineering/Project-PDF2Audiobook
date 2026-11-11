@@ -1,4 +1,4 @@
-import * as pdfParse from 'pdf-parse';
+import pdfParse from 'pdf-parse';
 import * as fs from 'fs';
 import type { ExtractedContent, Page, ContentElement } from './types';
 

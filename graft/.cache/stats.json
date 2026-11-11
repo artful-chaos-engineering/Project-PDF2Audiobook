@@ -1,14 +1,14 @@
 {
-  "nodeCount": 85,
-  "edgeCount": 160,
+  "nodeCount": 91,
+  "edgeCount": 180,
   "languages": [
     "typescript"
   ],
-  "totalCount": 85,
+  "totalCount": 91,
   "readyCount": 0,
-  "staleCount": 14,
+  "staleCount": 3,
   "dirty": true,
   "syncing": false,
-  "syncedAt": "2026-11-11T18:46:05.283Z",
-  "lastFile": "ttsConverter.ts"
+  "syncedAt": "2026-11-11T18:52:09.908Z",
+  "lastFile": "pdfExtractor.ts"
 }
