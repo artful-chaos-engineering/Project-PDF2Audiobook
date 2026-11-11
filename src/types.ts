@@ -42,7 +42,7 @@ export interface AudioSegment {
 export interface AudiobookConfig {
   pdfPath: string;
   outputPath: string;
-  voiceProvider: 'elevenlabs' | 'google' | 'azure';
+  voiceProvider: 'elevenlabs' | 'google' | 'azure' | 'mac';
   voice?: string;
   language?: string;
   speed?: number;

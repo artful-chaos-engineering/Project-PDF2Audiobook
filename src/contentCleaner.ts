@@ -115,8 +115,15 @@ export class ContentCleaner {
   }
 
   private extractFigureTitle(content: string): string | undefined {
+    // Extract the part after "Figure X:" - avoid capturing the number
     const match = content.match(/(?:[Ff]ig(?:ure)?|Fig\.?)\s+\d+[:\s]+(.+)/);
-    return match ? match[1].trim().slice(0, 100) : undefined;
+    if (match) {
+      const title = match[1].trim();
+      // Remove leading numbers like "1: " that might have been captured
+      const cleanTitle = title.replace(/^\d+[:\s]+/, '');
+      return cleanTitle.length > 0 ? cleanTitle.slice(0, 100) : undefined;
+    }
+    return undefined;
   }
 
   private extractTableHeaders(content: string): string[] {

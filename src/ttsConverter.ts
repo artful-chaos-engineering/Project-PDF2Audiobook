@@ -1,4 +1,11 @@
 import type { AudioSegment, AudiobookConfig } from './types';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+
+const execAsync = promisify(exec);
 
 export interface TTSProvider {
   synthesize(text: string, config: AudiobookConfig): Promise<Buffer>;
@@ -150,6 +157,56 @@ export class GoogleTTS implements TTSProvider {
   }
 }
 
+export class MacTTS implements TTSProvider {
+  private voiceName: string = 'Samantha';
+
+  constructor(voiceName?: string) {
+    this.voiceName = voiceName || 'Samantha';
+  }
+
+  async synthesize(text: string, config: AudiobookConfig): Promise<Buffer> {
+    const tmpDir = os.tmpdir();
+    const textFile = path.join(tmpDir, `text-${Date.now()}.txt`);
+    const audioFile = path.join(tmpDir, `audio-${Date.now()}.aiff`);
+    const rate = config.speed ? Math.round(200 * config.speed) : 200;
+
+    try {
+      // Write text to file to avoid command-line escaping issues
+      fs.writeFileSync(textFile, text);
+
+      // Use system 'say' command to generate audio from file (AIFF is native to macOS)
+      await execAsync(`say -v "${this.voiceName}" -r ${rate} -f "${textFile}" -o "${audioFile}"`);
+
+      // Read the generated audio file
+      const audioBuffer = fs.readFileSync(audioFile);
+
+      // Clean up temp files
+      fs.unlinkSync(textFile);
+      fs.unlinkSync(audioFile);
+
+      return audioBuffer;
+    } catch (error) {
+      // Clean up on error
+      if (fs.existsSync(textFile)) fs.unlinkSync(textFile);
+      if (fs.existsSync(audioFile)) fs.unlinkSync(audioFile);
+      throw new Error(`TTS generation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async getAvailableVoices(): Promise<string[]> {
+    try {
+      const { stdout } = await execAsync('say -v ?');
+      return stdout
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => line.split(/\s+/)[0])
+        .filter(v => v.length > 0);
+    } catch {
+      return ['Samantha', 'Victoria', 'Alex'];
+    }
+  }
+}
+
 export class TTSConverter {
   private provider: TTSProvider;
 
@@ -206,11 +263,24 @@ export class TTSConverter {
   private getProvider(providerName: string, config: AudiobookConfig): TTSProvider {
     switch (providerName) {
       case 'elevenlabs':
-        return new ElevenLabsTTS();
+        try {
+          return new ElevenLabsTTS();
+        } catch {
+          console.warn('⚠️ ElevenLabs API key not found, falling back to system TTS');
+          return new MacTTS(config.voice);
+        }
       case 'google':
-        return new GoogleTTS();
+        try {
+          return new GoogleTTS();
+        } catch {
+          console.warn('⚠️ Google API key not found, falling back to system TTS');
+          return new MacTTS(config.voice);
+        }
+      case 'mac':
+        return new MacTTS(config.voice);
       default:
-        throw new Error(`Unknown TTS provider: ${providerName}`);
+        // Default to Mac TTS (works without API keys)
+        return new MacTTS(config.voice);
     }
   }
 }

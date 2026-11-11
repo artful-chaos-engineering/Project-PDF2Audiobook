@@ -1,14 +1,14 @@
 {
-  "nodeCount": 72,
-  "edgeCount": 126,
+  "nodeCount": 85,
+  "edgeCount": 160,
   "languages": [
     "typescript"
   ],
-  "totalCount": 72,
+  "totalCount": 85,
   "readyCount": 0,
-  "staleCount": 21,
+  "staleCount": 14,
   "dirty": true,
   "syncing": false,
-  "syncedAt": "2026-11-11T18:42:55.622Z",
-  "lastFile": "audio-demo.ts"
+  "syncedAt": "2026-11-11T18:46:05.283Z",
+  "lastFile": "ttsConverter.ts"
 }
