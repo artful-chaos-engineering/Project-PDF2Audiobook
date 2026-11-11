@@ -14,7 +14,6 @@ export class ContentCleaner {
             narrativeLines.push(element.content);
             insertPosition = narrativeLines.length;
             break;
-
           case 'table':
             const tableSummary = this.summarizeTable(element.content);
             summaries.push({
@@ -24,7 +23,6 @@ export class ContentCleaner {
               insertedAt: insertPosition,
             });
             break;
-
           case 'figure':
             const figureSummary = this.summarizeFigure(element.content);
             summaries.push({
@@ -35,7 +33,6 @@ export class ContentCleaner {
               insertedAt: insertPosition,
             });
             break;
-
           case 'header':
           case 'footer':
           case 'toc':
@@ -47,7 +44,6 @@ export class ContentCleaner {
     }
 
     let finalText = narrativeLines.join('\n\n');
-
     for (const summary of summaries) {
       const insertion = this.formatSummaryInsertion(summary);
       finalText = this.insertSummary(finalText, insertion, summary.insertedAt);
@@ -60,84 +56,61 @@ export class ContentCleaner {
   }
 
   private summarizeTable(content: string): string {
-    const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const lines = content.split('\n').map(l => l.trim()).filter(l => l);
     if (lines.length < 2) return `a reference table`;
 
-    const titleLine = lines[0];
-    const title = titleLine.replace(/^Table\s+\d+[:\s]+/i, '').trim();
-
-    // Find header row (contains Algorithm, Type, Accuracy, etc.)
-    let headerRowIndex = -1;
-    for (let i = 1; i < Math.min(6, lines.length); i++) {
-      if (/algorithm|type|accuracy|speed|memory|use case/i.test(lines[i])) {
-        headerRowIndex = i;
-        break;
-      }
-    }
-
-    // Count algorithm names (Algo names typically: Decision, Random, Neural, Linear, Logistic, SVM, etc.)
+    const algoPattern = /^(decision|random|neural|linear|logistic|svm|support|gradient|naive)/i;
     let algoCount = 0;
-    const algoPattern = /^(decision|random|neural|linear|logistic|svm|tree|forest|network|regression|gradient|naive|support vector)/i;
-    for (let i = (headerRowIndex > 0 ? headerRowIndex + 1 : 1); i < lines.length; i++) {
-      if (algoPattern.test(lines[i])) {
-        algoCount++;
-      }
+    for (const line of lines) {
+      if (algoPattern.test(line)) algoCount++;
     }
     if (algoCount === 0) algoCount = Math.max(2, lines.length - 2);
 
-    // Determine table type
     const fullContent = content.toLowerCase();
-    const hasPercentages = /\d+%/.test(content);
-    const hasAlgorithms = /algorithm|regression|decision|forest|network/i.test(content);
+    const hasAlgos = /algorithm|regression|decision|forest|network/i.test(content);
     const hasMetrics = /accuracy|speed|memory/i.test(content);
-    const hasTypes = /type|classification|prediction/i.test(content);
+    const hasTypes = /type|classification/i.test(content);
 
-    if (hasAlgorithms && hasMetrics) {
-      return `a comparison of ${algoCount} machine learning algorithms showing accuracy, speed, and memory performance`;
-    } else if (hasAlgorithms && hasTypes) {
-      return `a table comparing ${algoCount} algorithms with their type and use case`;
-    } else if (hasPercentages) {
-      return `a data table with ${algoCount} rows showing percentages`;
+    if (hasAlgos && hasMetrics) {
+      return `comparison of ${algoCount} machine learning algorithms with accuracy, speed, and memory metrics`;
+    } else if (hasAlgos && hasTypes) {
+      return `table of ${algoCount} algorithms with their types and use cases`;
+    } else if (hasMetrics) {
+      return `data table showing performance metrics for ${algoCount} items`;
     } else {
-      return `a ${algoCount}-row comparison table`;
+      return `reference table with ${algoCount} rows`;
     }
   }
 
   private summarizeFigure(content: string): string {
-    const parts = content.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0);
+    // Extract caption - take everything after "Figure N:" up to the first sentence end or body text
+    let caption = content.replace(/^Figure\s+\d+[:\s]+/i, '').trim();
     
-    if (parts.length === 0) return `a diagram`;
+    // Just use caption as-is (it should be clean since we extract only caption in the extraction phase)
+    // But strip anything after a line break to avoid body text
+    const cleanCaption = caption.split('\n')[0].trim();
     
-    // Remove "Figure N:" prefix from first part
-    let caption = parts[0].replace(/^Figure\s+\d+[:\s]+/i, '').trim();
-    
-    // If there are description lines (parts[1], parts[2], etc.), combine them as the description
-    if (parts.length > 1) {
-      const description = parts.slice(1).join(' ').trim();
-      return `${caption} ${description}`;
-    }
-    
-    return caption;
+    return cleanCaption || 'a diagram';
   }
 
   private extractTableNumber(content: string): string {
-    const match = content.match(/[Tt]able\s+(\d+(?:\.\d+)?)/);
+    const match = content.match(/[Tt]able\s+(\d+)/);
     return match ? match[1] : 'unknown';
   }
 
   private extractFigureNumber(content: string): string {
-    const match = content.match(/[Ff]ig(?:ure)?\s+(\d+(?:\.\d+)?)/);
+    const match = content.match(/[Ff]ig(?:ure)?\s+(\d+)/);
     return match ? match[1] : 'unknown';
   }
 
   private extractFigureTitle(content: string): string | undefined {
-    const match = content.match(/(?:[Ff]ig(?:ure)?|Fig\.?)\s+\d+[:\s]+([^\n]+)/);
+    const match = content.match(/[Ff]ig(?:ure)?\s+\d+[:\s]+([^\n]+)/);
     return match ? match[1].trim().slice(0, 100) : undefined;
   }
 
   private formatSummaryInsertion(summary: TableFigureSummary): string {
     const type = summary.type === 'table' ? 'Table' : 'Figure';
-    return `${type} ${summary.number} shows ${summary.summary}.`;
+    return `${type} ${summary.number} shows ${summary.summary}`;
   }
 
   private insertSummary(text: string, insertion: string, position: number): string {
@@ -150,9 +123,6 @@ export class ContentCleaner {
   }
 
   private cleanupText(text: string): string {
-    return text
-      .replace(/\n\n\n+/g, '\n\n')
-      .replace(/\s+([.,:;!?])/g, '$1')
-      .trim();
+    return text.replace(/\n\n\n+/g, '\n\n').replace(/\s+([.,:;!?])/g, '$1').trim();
   }
 }
