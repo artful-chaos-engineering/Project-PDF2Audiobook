@@ -1,0 +1,24 @@
+{
+  "pdfPath": "./my-book.pdf",
+  "outputPath": "./my-book.mp3",
+  "voiceProvider": "elevenlabs",
+  "voice": "bella",
+  "language": "en",
+  "speed": 1.0,
+  "contentFilterOptions": {
+    "skipHeaders": true,
+    "skipFooters": true,
+    "skipTableOfContents": true,
+    "skipReferences": true,
+    "skipGlossary": true,
+    "summarizeTables": true,
+    "summarizeFigures": true,
+    "tableMaxLength": 200,
+    "figureMaxLength": 150
+  },
+  "audioOptions": {
+    "bitrate": "128k",
+    "sampleRate": 22050,
+    "format": "mp3"
+  }
+}

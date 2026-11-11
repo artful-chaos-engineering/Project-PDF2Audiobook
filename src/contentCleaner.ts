@@ -66,21 +66,41 @@ export class ContentCleaner {
 
   private summarizeTable(content: string, pageNum: number): string {
     // Extract key information from table
-    const lines = content.split('\n').slice(0, 5); // First few lines capture structure
+    const lines = content.split('\n').filter(l => l.trim().length > 0).slice(0, 10);
     const headers = this.extractTableHeaders(content);
 
     if (headers.length > 0) {
-      return `showing columns: ${headers.slice(0, 3).join(', ')}${headers.length > 3 ? ', and more' : ''}`;
+      const headerList = headers.slice(0, 4).join(', ');
+      return `a data table with ${headers.length} columns${headers.length > 4 ? ` including: ${headerList}` : ': ' + headerList}`;
     }
+
+    // Try to infer table contents from text patterns
+    const hasNumericData = /\d+([,.]?\d+)?/.test(content);
+    const hasPercentages = /%/.test(content);
+
+    if (hasNumericData && hasPercentages) {
+      return 'a statistical data table with percentages';
+    } else if (hasNumericData) {
+      return 'a numerical data table';
+    }
+
     return 'a data table';
   }
 
   private summarizeFigure(content: string, pageNum: number): string {
     // Extract figure caption or description
-    const caption = content.match(/(?:caption|figure|fig\.?)[:\s]+(.*)/i);
-    if (caption) {
-      return caption[1].trim().slice(0, 150);
+    const captionMatch = content.match(/(?:caption|figure|fig\.?)[:\s]+(.+?)(?:\n|$)/i);
+    if (captionMatch) {
+      const summary = captionMatch[1].trim();
+      return summary.length > 150 ? summary.slice(0, 147) + '...' : summary;
     }
+
+    // Look for descriptive text
+    const descMatch = content.match(/shows?[:\s]+(.+?)(?:\n|$)/i);
+    if (descMatch) {
+      return descMatch[1].trim().slice(0, 150);
+    }
+
     return 'a diagram or illustration';
   }
 

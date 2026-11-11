@@ -87,46 +87,95 @@ export class PDFExtractor {
   }
 
   private isHeader(text: string, pageNum: number): boolean {
-    // Headers typically appear at the top of pages with small fonts
-    // Check for common header patterns
-    return text.length < 80 && (text.includes('Chapter') || /^\d+\./.test(text));
+    // Headers: running text at top of pages
+    const trimmed = text.trim();
+    return (
+      trimmed.length < 100 &&
+      (trimmed.match(/^(chapter|part|section)\s+\d+/i) ||
+        trimmed.match(/^[\w\s]+\s{2,}\d+$/) ||
+        /^[A-Z\s]{3,50}$/.test(trimmed))
+    );
   }
 
   private isFooter(text: string, pageNum: number): boolean {
-    // Footers often contain page numbers or are repeated at bottom
-    return text.length < 50 && (/^\d+$/.test(text) || text.match(/page\s*\d+/i));
+    // Footers: page numbers, publication info
+    const trimmed = text.trim();
+    return (
+      trimmed.length < 80 &&
+      (trimmed.match(/^page\s*\d+/i) ||
+        /^-?\s*\d+\s*-?$/.test(trimmed) ||
+        trimmed.match(/©.*\d{4}/) ||
+        trimmed.match(/www\.|\.com|\.org/))
+    );
   }
 
   private isTableOfContents(text: string): boolean {
-    return /^(table\s*of\s*contents|toc|contents)/i.test(text);
+    const trimmed = text.trim();
+    return /^(table\s*of\s*contents|contents|toc|table of contents)/i.test(
+      trimmed
+    );
   }
 
   private isTableContent(text: string): boolean {
-    // Detect table rows - typically multiple columns separated by spaces or tabs
-    return /^\s*[\w\s]*\s{2,}[\w\s]*/.test(text) && !text.includes('\n');
+    // Tables have multiple columns separated by whitespace or look like data
+    const trimmed = text.trim();
+    if (trimmed.length < 20) return false;
+
+    // Multiple columns with consistent spacing
+    const columnCount = (trimmed.match(/\s{2,}/g) || []).length;
+    if (columnCount > 1) return true;
+
+    // Lines that look like table rows (alternating text and numbers)
+    return /[\w\s]+\s+\d+[\s\d,]+$/.test(trimmed);
   }
 
   private isFigureCaption(text: string): boolean {
-    return /^(figure|fig\.?)\s+\d+/i.test(text);
+    return /^(figure|fig\.?)\s+(\d+(?:\.\d+)?)[:\s]/i.test(text.trim());
   }
 
   private isReference(text: string): boolean {
-    return /^(references?|bibliography|works\s*cited)/i.test(text);
+    const trimmed = text.trim();
+    return (
+      /^(references?|bibliography|works\s*cited|citations?)/i.test(trimmed) ||
+      trimmed.match(/^\[[\d\w]+\]\s+(.*)?$/)
+    );
   }
 
   private isGlossary(text: string): boolean {
-    return /^(glossary|appendix|definitions?)/i.test(text);
+    const trimmed = text.trim();
+    return (
+      /^(glossary|appendices?|appendix|definitions?|index)/i.test(trimmed)
+    );
   }
 
   private isHeading(text: string): boolean {
-    // Detect common heading patterns
-    return /^[A-Z][A-Z\s]*$/.test(text) && text.length > 3 && text.length < 100;
+    // Multi-word uppercase text or clear heading patterns
+    const trimmed = text.trim();
+    if (trimmed.length < 3 || trimmed.length > 150) return false;
+
+    return (
+      /^[A-Z][A-Z\s]{3,}$/.test(trimmed) ||
+      /^\d+\.\s+[A-Z].+/.test(trimmed) ||
+      /^#{1,6}\s+.+/i.test(trimmed)
+    );
   }
 
   private getHeadingLevel(text: string): number {
-    // Simple heuristic: longer headings are lower level
-    if (text.length < 30) return 1;
-    if (text.length < 60) return 2;
+    const trimmed = text.trim();
+
+    // Check for markdown style headings
+    const hashCount = (trimmed.match(/^#+/)?.[0] || '').length;
+    if (hashCount > 0) return Math.min(hashCount, 6);
+
+    // Check for numbered outline
+    const numberMatch = trimmed.match(/^(\d+)\./);
+    if (numberMatch) {
+      return Math.min(numberMatch[1].split('.').length, 3);
+    }
+
+    // Heuristic: shorter headings are higher level
+    if (trimmed.length < 30) return 1;
+    if (trimmed.length < 60) return 2;
     return 3;
   }
 }
