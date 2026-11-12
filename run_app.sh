@@ -19,4 +19,4 @@ done
 command -v npx >/dev/null || { echo "ERROR: npx not found. Install Node.js." >&2; exit 1; }
 command -v ffmpeg >/dev/null || { echo "ERROR: ffmpeg not found. Install it (brew install ffmpeg)." >&2; exit 1; }
 
-exec npx tsx src/generate-with-elevenlabs.ts
+exec npx tsx src/generate-with-elevenlabs.ts "$@"

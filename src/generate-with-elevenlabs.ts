@@ -2,6 +2,7 @@ import { processPdf } from './processPdf';
 import { getConfig } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { parseMode } from './modes';
 
 async function generateWithElevenLabs() {
   const config = getConfig();
@@ -27,18 +28,15 @@ async function generateWithElevenLabs() {
   console.log(`Input: ${config.inputDir}`);
   console.log(`Output: ${config.outputDir}\n`);
 
-  const voices = ['sarah', 'bella', 'laura', 'charlie', 'george'];
-  let voiceIndex = 0;
+  const mode = parseMode(process.argv[2] || process.env.AUDIOBOOK_MODE);
+  console.log(`Mode: ${mode}\n`);
 
   let failures = 0;
   for (const file of inputFiles) {
-    const voice = voices[voiceIndex % voices.length];
-    voiceIndex++;
-
     console.log(`Processing: ${file}`);
     console.log('-'.repeat(70));
     try {
-      const result = await processPdf(path.join(config.inputDir, file), config.outputDir, voice);
+      const result = await processPdf(path.join(config.inputDir, file), config.outputDir, mode);
       const mins = Math.floor(result.durationSeconds / 60);
       const secs = Math.floor(result.durationSeconds % 60);
       console.log(`✓ Generated: ${(result.sizeBytes / 1024 / 1024).toFixed(2)} MB | ${mins}m ${secs}s\n`);

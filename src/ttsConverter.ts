@@ -1,4 +1,5 @@
 import type { AudioSegment, AudiobookConfig } from './types';
+import type { Segment } from './modes';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -7,18 +8,23 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
-export async function joinAudioWithPauses(parts: Buffer[], pauseSeconds: number): Promise<{ audio: Buffer; duration: number }> {
+export interface AudioPart {
+  audio: Buffer;
+  pauseAfter: number;
+}
+
+export async function joinAudioWithPauses(parts: AudioPart[]): Promise<{ audio: Buffer; duration: number }> {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf2audiobook-'));
   try {
     const listLines: string[] = [];
-    parts.forEach((buf, i) => {
+    parts.forEach((part, i) => {
       const file = path.join(workDir, `part-${i}.mp3`);
-      fs.writeFileSync(file, buf);
+      fs.writeFileSync(file, part.audio);
       listLines.push(`file '${file}'`);
-      if (i < parts.length - 1) {
+      if (part.pauseAfter > 0 && i < parts.length - 1) {
         const silence = path.join(workDir, `pause-${i}.mp3`);
         execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
-          '-t', String(pauseSeconds), '-c:a', 'libmp3lame', '-q:a', '4', '-y', silence]);
+          '-t', String(part.pauseAfter), '-c:a', 'libmp3lame', '-q:a', '4', '-y', silence]);
         listLines.push(`file '${silence}'`);
       }
     });
@@ -79,6 +85,7 @@ export class ElevenLabsTTS implements TTSProvider {
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
+            speed: 0.9,
           },
         }),
       });
@@ -139,14 +146,19 @@ export class TTSConverter {
     };
   }
 
-  async convertSectionsToAudio(sections: string[], config: AudiobookConfig, pauseSeconds: number): Promise<AudioSegment> {
-    const sectionAudio: Buffer[] = [];
-    for (const section of sections) {
-      sectionAudio.push((await this.convertToAudio(section, config)).audio);
+  async convertSegmentsToAudio(segments: Segment[], config: AudiobookConfig): Promise<AudioSegment> {
+    const parts: AudioPart[] = [];
+    for (const segment of segments) {
+      const chunks = this.chunkText(segment.text, 5000);
+      for (let i = 0; i < chunks.length; i++) {
+        const audio = await this.provider.synthesize(chunks[i], { ...config, voice: segment.voice });
+        const last = i === chunks.length - 1;
+        parts.push({ audio, pauseAfter: last ? segment.pauseAfter : 0 });
+      }
     }
-    const joined = await joinAudioWithPauses(sectionAudio, pauseSeconds);
+    const joined = await joinAudioWithPauses(parts);
     return {
-      text: sections.join('\n\n'),
+      text: segments.map(s => s.text).join('\n\n'),
       audio: joined.audio,
       duration: joined.duration,
       voice: config.voice,

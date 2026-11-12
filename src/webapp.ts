@@ -3,10 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { processPdf } from './processPdf';
 import { getConfig } from './config';
+import { parseMode } from './modes';
 
 const PORT = Number(process.env.PORT || 3000);
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
-const VOICE = 'sarah';
 
 if (!process.env.ELEVENLABS_API_KEY || !process.env.ANTHROPIC_API_KEY) {
   console.error('ERROR: ELEVENLABS_API_KEY and ANTHROPIC_API_KEY must be set (see .env)');
@@ -41,6 +41,7 @@ audio { width:100%; margin-top:12px; }
 <h1>PDF to Audiobook</h1>
 <div class="box">
 <input type="file" id="pdf" accept="application/pdf">
+<p><select id="mode"><option value="narration">Narration</option><option value="podcast">Podcast</option><option value="debate">Debate</option><option value="summary">Summary</option></select></p>
 <p><button id="go" disabled>Convert</button></p>
 <div id="status"></div>
 <div id="result"></div>
@@ -58,7 +59,7 @@ go.addEventListener('click', async () => {
   result.innerHTML = '';
   status.textContent = 'Converting ' + file.name + '. This takes about as long as the audio plays, plus processing. Keep this tab open.';
   try {
-    const res = await fetch('/convert', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file });
+    const res = await fetch('/convert', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name), 'X-Mode': document.getElementById('mode').value }, body: file });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     status.textContent = 'Done: ' + data.sections + ' sections, ' + Math.round(data.durationSeconds / 60) + ' min.';
@@ -124,7 +125,8 @@ async function handleConvert(req: http.IncomingMessage, res: http.ServerResponse
   try {
     const inputPath = path.join(config.inputDir, baseName);
     fs.writeFileSync(inputPath, body);
-    const result = await processPdf(inputPath, config.outputDir, VOICE, msg => console.log(msg));
+    const mode = parseMode(String(req.headers['x-mode'] || ''));
+    const result = await processPdf(inputPath, config.outputDir, mode, msg => console.log(msg));
     sendJson(res, 200, {
       url: '/output/' + encodeURIComponent(path.basename(result.outputPath)),
       file: path.basename(result.outputPath),

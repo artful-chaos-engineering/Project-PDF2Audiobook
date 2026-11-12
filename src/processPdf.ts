@@ -3,8 +3,7 @@ import { cleanWithLLM, splitIntoSections } from './smartCleaner';
 import { TTSConverter } from './ttsConverter';
 import * as path from 'path';
 import type { AudiobookConfig } from './types';
-
-export const SECTION_PAUSE_SECONDS = 2.5;
+import { buildSegments, Mode } from './modes';
 
 export interface ProcessResult {
   outputPath: string;
@@ -13,9 +12,9 @@ export interface ProcessResult {
   sizeBytes: number;
 }
 
-export async function processPdf(filePath: string, outputDir: string, voice: string, log: (msg: string) => void = console.log): Promise<ProcessResult> {
+export async function processPdf(filePath: string, outputDir: string, mode: Mode, log: (msg: string) => void = console.log): Promise<ProcessResult> {
   const fs = await import('fs');
-  const outputFile = path.basename(filePath).replace(/\.pdf$/i, '-premium.mp3');
+  const outputFile = path.basename(filePath).replace(/\.pdf$/i, `-${mode}.mp3`);
 
   log('1️⃣  Extracting PDF...');
   const extracted = await new PDFExtractor().extractFromFile(filePath);
@@ -34,17 +33,18 @@ export async function processPdf(filePath: string, outputDir: string, voice: str
   }
   if (cleanedSections.length === 0) throw new Error('No narrative text found in document');
 
-  log(`   Voice: ${voice}`);
-  log(`3️⃣  Generating premium audio with ${SECTION_PAUSE_SECONDS}s pauses between sections...`);
+  log(`3️⃣  Building ${mode} script...`);
+  const segments = await buildSegments(mode, cleanedSections);
+  log(`   ${segments.length} segments`);
   const ttsConfig: AudiobookConfig = {
     pdfPath: filePath,
     outputPath: path.join(outputDir, outputFile),
     voiceProvider: 'elevenlabs',
-    voice,
-    speed: 1.0,
+    speed: 0.9,
   };
   const conv = new TTSConverter(ttsConfig);
-  const audio = await conv.convertSectionsToAudio(cleanedSections, ttsConfig, SECTION_PAUSE_SECONDS);
+  log('4️⃣  Generating audio...');
+  const audio = await conv.convertSegmentsToAudio(segments, ttsConfig);
 
   fs.mkdirSync(outputDir, { recursive: true });
   const audioPath = path.join(outputDir, outputFile);
