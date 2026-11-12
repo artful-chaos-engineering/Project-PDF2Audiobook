@@ -1,181 +1,211 @@
-import pdfParse from 'pdf-parse';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
+import * as os from 'os';
+import * as path from 'path';
 import type { ExtractedContent, Page, ContentElement } from './types';
 
 export class PDFExtractor {
   async extractFromFile(pdfPath: string): Promise<ExtractedContent> {
-    const fileBuffer = fs.readFileSync(pdfPath);
-    const pdf = await pdfParse(fileBuffer);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
+    const scriptFile = path.join(tmpDir, 'extract.py');
+    const outputFile = path.join(tmpDir, 'extracted.txt');
 
-    const pages: Page[] = pdf.pages.map((pageText: string, index: number) => ({
-      pageNumber: index + 1,
-      text: pageText,
-      elements: this.identifyElements(pageText, index + 1),
-    }));
+    try {
+      const script = `
+import pypdf
+with open('${pdfPath}', 'rb') as f:
+    reader = pypdf.PdfReader(f)
+    with open('${outputFile}', 'w') as out:
+        for i, page in enumerate(reader.pages, 1):
+            out.write(f'=== PAGE {i} ===\\n')
+            text = page.extract_text() or ''
+            out.write(text + '\\n\\n')
+`;
 
-    return {
-      pages,
-      metadata: {
-        title: pdf.info?.Title,
-        author: pdf.info?.Author,
-        pageCount: pdf.numPages,
-      },
-    };
+      fs.writeFileSync(scriptFile, script);
+      execSync(`python3 "${scriptFile}"`, { encoding: 'utf-8' });
+
+      if (!fs.existsSync(outputFile)) {
+        throw new Error(`Output file not created: ${outputFile}`);
+      }
+
+      const output = fs.readFileSync(outputFile, 'utf-8');
+      
+      const pageTexts = output.split('=== PAGE ').slice(1);
+      if (!pageTexts || pageTexts.length === 0) {
+        throw new Error('No pages extracted from PDF');
+      }
+
+      const pages: Page[] = pageTexts.map((pageText, idx) => {
+        const lines = pageText.split('\n');
+        const pageNum = parseInt(lines[0]) || idx + 1;
+        const text = lines.slice(1).join('\n');
+
+        return {
+          pageNumber: pageNum,
+          text,
+          elements: this.identifyElements(text, pageNum),
+        };
+      });
+
+      return {
+        pages,
+        metadata: {
+          title: 'Document',
+          pageCount: pages.length,
+        },
+      };
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch (e) {}
+    }
   }
 
   private identifyElements(text: string, pageNum: number): ContentElement[] {
     const elements: ContentElement[] = [];
     const lines = text.split('\n');
 
-    let currentElement: ContentElement | null = null;
+    let inTOC = false, inReferences = false, inGlossary = false, inCode = false;
+    let tableBuffer: string[] = [];
+    const bodyLines: string[] = [];
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const trimmed = line.trim();
+      
+      // Skip empty lines
       if (!trimmed) continue;
 
-      // Detect element type
-      if (this.isHeader(trimmed, pageNum)) {
-        this.flushElement(elements, currentElement);
-        currentElement = { type: 'header', content: trimmed };
-      } else if (this.isFooter(trimmed, pageNum)) {
-        this.flushElement(elements, currentElement);
-        currentElement = { type: 'footer', content: trimmed };
-      } else if (this.isTableOfContents(trimmed)) {
-        this.flushElement(elements, currentElement);
-        elements.push({ type: 'toc', content: trimmed });
-        currentElement = null;
-      } else if (this.isTableContent(trimmed)) {
-        this.flushElement(elements, currentElement);
-        if (currentElement?.type !== 'table') {
-          currentElement = { type: 'table', content: trimmed };
-        } else {
-          currentElement.content += '\n' + trimmed;
-        }
-      } else if (this.isFigureCaption(trimmed)) {
-        this.flushElement(elements, currentElement);
-        currentElement = { type: 'figure', content: trimmed };
-      } else if (this.isReference(trimmed)) {
-        this.flushElement(elements, currentElement);
-        elements.push({ type: 'reference', content: trimmed });
-        currentElement = null;
-      } else if (this.isGlossary(trimmed)) {
-        this.flushElement(elements, currentElement);
+      // Detect code blocks (indented code, backticks, etc.)
+      if (this.looksLikeCode(trimmed, line)) {
+        inCode = true;
+        elements.push({ type: 'glossary', content: trimmed }); // Treat as non-narrative
+        continue;
+      }
+
+      if (inCode && !trimmed.match(/^[A-Z]/)) {
         elements.push({ type: 'glossary', content: trimmed });
-        currentElement = null;
-      } else if (this.isHeading(trimmed)) {
-        this.flushElement(elements, currentElement);
-        const level = this.getHeadingLevel(trimmed);
-        currentElement = { type: 'heading', content: trimmed, level };
-      } else {
-        if (!currentElement || currentElement.type !== 'body') {
-          this.flushElement(elements, currentElement);
-          currentElement = { type: 'body', content: trimmed };
+        continue;
+      }
+      if (inCode) inCode = false;
+
+      // Detect headers
+      if (i === 0 && this.looksLikeHeader(trimmed)) {
+        elements.push({ type: 'header', content: trimmed });
+        continue;
+      }
+
+      // Detect footers
+      if (i === lines.length - 1 && this.looksLikeFooter(trimmed)) {
+        elements.push({ type: 'footer', content: trimmed });
+        continue;
+      }
+
+      // Detect TOC
+      if (/^table\s+of\s+contents$/i.test(trimmed)) {
+        inTOC = true; inReferences = false; inGlossary = false;
+        elements.push({ type: 'toc', content: trimmed });
+        continue;
+      }
+
+      // Detect References
+      if (/^\d*\.?\s*references$/i.test(trimmed) || /^\d*\.?\s*bibliography$/i.test(trimmed)) {
+        inTOC = false; inReferences = true; inGlossary = false;
+        elements.push({ type: 'reference', content: trimmed });
+        continue;
+      }
+
+      // Detect Glossary
+      if (/^\d*\.?\s*(glossary|appendix)/i.test(trimmed)) {
+        inTOC = false; inReferences = false; inGlossary = true;
+        elements.push({ type: 'glossary', content: trimmed });
+        continue;
+      }
+
+      // Handle TOC entries
+      if (inTOC) {
+        if (!/^\d+\./.test(trimmed) && /^[A-Z]/.test(trimmed) && trimmed.length > 5) inTOC = false;
+        else { elements.push({ type: 'toc', content: trimmed }); continue; }
+      }
+
+      // Handle References entries
+      if (inReferences) {
+        if (!/^\[\d+\]/.test(trimmed) && /^[A-Z]/.test(trimmed)) inReferences = false;
+        else { elements.push({ type: 'reference', content: trimmed }); continue; }
+      }
+
+      // Handle Glossary entries
+      if (inGlossary) {
+        if (/^[A-Z]/.test(trimmed) && !/[:–\-]/.test(trimmed)) inGlossary = false;
+        else { elements.push({ type: 'glossary', content: trimmed }); continue; }
+      }
+
+      // Handle tables - buffer until section boundary
+      if (tableBuffer.length > 0) {
+        if (/^\d+\.\d+\s+/.test(trimmed) || /^Figure\s+\d+:/i.test(trimmed) || /^[A-Z][A-Z\s]{5,}$/.test(trimmed)) {
+          elements.push({ type: 'table', content: tableBuffer.join('\n') });
+          tableBuffer = [];
         } else {
-          currentElement.content += '\n' + trimmed;
+          tableBuffer.push(trimmed);
+          continue;
         }
+      }
+
+      if (/^Table\s+\d+:/i.test(trimmed)) {
+        tableBuffer = [trimmed];
+        continue;
+      }
+
+      // Handle figures
+      if (/^Figure\s+\d+:/i.test(trimmed)) {
+        const figContent = [trimmed];
+        for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+          const nextLine = lines[j].trim();
+          if (!nextLine) break;
+          if (/^\d+\.\d+/.test(nextLine) || /^Table/.test(nextLine)) break;
+          figContent.push(nextLine);
+          i = j;
+        }
+        elements.push({ type: 'figure', content: figContent.join(' ') });
+        continue;
+      }
+
+      // Add body text
+      if (trimmed.length > 2 && !inTOC && !inReferences && !inGlossary && !inCode) {
+        bodyLines.push(trimmed);
       }
     }
 
-    this.flushElement(elements, currentElement);
+    if (tableBuffer.length > 0) {
+      elements.push({ type: 'table', content: tableBuffer.join('\n') });
+    }
+
+    // Add collected body lines
+    for (const bodyLine of bodyLines) {
+      elements.push({ type: 'body', content: bodyLine });
+    }
+
     return elements;
   }
 
-  private flushElement(elements: ContentElement[], element: ContentElement | null) {
-    if (element && element.content.trim()) {
-      elements.push(element);
-    }
+  private looksLikeHeader(line: string): boolean {
+    if (line.length > 100 || line.length < 3) return false;
+    return /^(chapter|section|part|[A-Z\s]{5,}|[A-Z][a-z]+\s+\d+)$/i.test(line) ||
+           /^[\w\s]+\s{2,}\d+$/.test(line);
   }
 
-  private isHeader(text: string, pageNum: number): boolean {
-    // Headers: running text at top of pages
-    const trimmed = text.trim();
-    return (
-      trimmed.length < 100 &&
-      (/^(chapter|part|section)\s+\d+/i.test(trimmed) ||
-        /^[\w\s]+\s{2,}\d+$/.test(trimmed) ||
-        /^[A-Z\s]{3,50}$/.test(trimmed))
-    );
+  private looksLikeFooter(line: string): boolean {
+    if (line.length > 80 || line.length < 1) return false;
+    return /^(page\s*\d+|-\s*\d+\s*-|©|www\.|[A-Z\s]{3,}\s+\d+)$/i.test(line) ||
+           /^\d+$/.test(line) || /©.*\d{4}/.test(line) || /\.(com|org|edu)/.test(line);
   }
 
-  private isFooter(text: string, pageNum: number): boolean {
-    // Footers: page numbers, publication info
-    const trimmed = text.trim();
-    return (
-      trimmed.length < 80 &&
-      (/^page\s*\d+/i.test(trimmed) ||
-        /^-?\s*\d+\s*-?$/.test(trimmed) ||
-        /©.*\d{4}/.test(trimmed) ||
-        /www\.|\.com|\.org/.test(trimmed))
-    );
-  }
-
-  private isTableOfContents(text: string): boolean {
-    const trimmed = text.trim();
-    return /^(table\s*of\s*contents|contents|toc|table of contents)/i.test(
-      trimmed
-    );
-  }
-
-  private isTableContent(text: string): boolean {
-    // Tables have multiple columns separated by whitespace or look like data
-    const trimmed = text.trim();
-    if (trimmed.length < 20) return false;
-
-    // Multiple columns with consistent spacing
-    const columnCount = (trimmed.match(/\s{2,}/g) || []).length;
-    if (columnCount > 1) return true;
-
-    // Lines that look like table rows (alternating text and numbers)
-    return /[\w\s]+\s+\d+[\s\d,]+$/.test(trimmed);
-  }
-
-  private isFigureCaption(text: string): boolean {
-    return /^(figure|fig\.?)\s+(\d+(?:\.\d+)?)[:\s]/i.test(text.trim());
-  }
-
-  private isReference(text: string): boolean {
-    const trimmed = text.trim();
-    return (
-      /^(references?|bibliography|works\s*cited|citations?)/i.test(trimmed) ||
-      /^\[[\d\w]+\]\s+(.*)?$/.test(trimmed)
-    );
-  }
-
-  private isGlossary(text: string): boolean {
-    const trimmed = text.trim();
-    return (
-      /^(glossary|appendices?|appendix|definitions?|index)/i.test(trimmed)
-    );
-  }
-
-  private isHeading(text: string): boolean {
-    // Multi-word uppercase text or clear heading patterns
-    const trimmed = text.trim();
-    if (trimmed.length < 3 || trimmed.length > 150) return false;
-
-    return (
-      /^[A-Z][A-Z\s]{3,}$/.test(trimmed) ||
-      /^\d+\.\s+[A-Z].+/.test(trimmed) ||
-      /^#{1,6}\s+.+/i.test(trimmed)
-    );
-  }
-
-  private getHeadingLevel(text: string): number {
-    const trimmed = text.trim();
-
-    // Check for markdown style headings
-    const hashCount = (trimmed.match(/^#+/)?.[0] || '').length;
-    if (hashCount > 0) return Math.min(hashCount, 6);
-
-    // Check for numbered outline
-    const numberMatch = trimmed.match(/^(\d+)\./);
-    if (numberMatch) {
-      return Math.min(numberMatch[1].split('.').length, 3);
-    }
-
-    // Heuristic: shorter headings are higher level
-    if (trimmed.length < 30) return 1;
-    if (trimmed.length < 60) return 2;
-    return 3;
+  private looksLikeCode(trimmed: string, line: string): boolean {
+    // Check for code indicators: backticks, code block markers, heavy indentation
+    if (/```|```javascript|```python|```bash|<code>|{|}|=>|const |function |class /.test(trimmed)) return true;
+    if (/^\s{4,}/.test(line) && trimmed.length > 0) return true; // Heavily indented
+    if (/^>>>|^\$|^#!|^import |^from |^def |^class /.test(trimmed)) return true; // Python/shell indicators
+    return false;
   }
 }

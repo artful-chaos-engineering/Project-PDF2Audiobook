@@ -1,15 +1,50 @@
 import type { AudioSegment, AudiobookConfig } from './types';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import type { Segment } from './modes';
 import * as fs from 'fs';
-import * as path from 'path';
 import * as os from 'os';
+import * as path from 'path';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+export interface AudioPart {
+  audio: Buffer;
+  pauseAfter: number;
+}
+
+export async function joinAudioWithPauses(parts: AudioPart[]): Promise<{ audio: Buffer; duration: number }> {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf2audiobook-'));
+  try {
+    const listLines: string[] = [];
+    parts.forEach((part, i) => {
+      const file = path.join(workDir, `part-${i}.mp3`);
+      fs.writeFileSync(file, part.audio);
+      listLines.push(`file '${file}'`);
+      if (part.pauseAfter > 0 && i < parts.length - 1) {
+        const silence = path.join(workDir, `pause-${i}.mp3`);
+        execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+          '-t', String(part.pauseAfter), '-c:a', 'libmp3lame', '-q:a', '4', '-y', silence]);
+        listLines.push(`file '${silence}'`);
+      }
+    });
+    const listFile = path.join(workDir, 'list.txt');
+    fs.writeFileSync(listFile, listLines.join('\n'));
+    const outFile = path.join(workDir, 'joined.mp3');
+    await execFileAsync('ffmpeg', ['-v', 'error', '-f', 'concat', '-safe', '0', '-i', listFile,
+      '-c:a', 'libmp3lame', '-q:a', '4', '-y', outFile]);
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration',
+      '-of', 'csv=p=0', outFile]);
+    return { audio: fs.readFileSync(outFile), duration: parseFloat(stdout.trim()) };
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}
 
 export interface TTSProvider {
   synthesize(text: string, config: AudiobookConfig): Promise<Buffer>;
   getAvailableVoices(): Promise<string[]>;
+  getName(): string;
 }
 
 export class ElevenLabsTTS implements TTSProvider {
@@ -18,13 +53,24 @@ export class ElevenLabsTTS implements TTSProvider {
   constructor(apiKey?: string) {
     this.apiKey = apiKey || process.env.ELEVENLABS_API_KEY || '';
     if (!this.apiKey) {
-      throw new Error('ElevenLabs API key not found. Set ELEVENLABS_API_KEY environment variable.');
+      throw new Error('ELEVENLABS_API_KEY is required. Get a free key at https://elevenlabs.io');
     }
   }
 
+  getName(): string {
+    return 'ElevenLabs Premium AI';
+  }
+
   async synthesize(text: string, config: AudiobookConfig): Promise<Buffer> {
-    const voice = config.voice || 'bella';
-    const voiceId = this.getVoiceId(voice);
+    const voices: { [key: string]: string } = {
+      'sarah': 'EXAVITQu4vr4xnSDxMaL',     // Mature, Reassuring, Confident
+      'bella': 'hpp4J3VqNfWAUOO0d1Us',     // Professional, Bright, Warm
+      'laura': 'FGY2WhTYpPnrIDTdsKH5',     // Enthusiast, Quirky
+      'charlie': 'IKne3meq5aSn9XLyUdCD',   // Deep, Confident, Energetic
+      'george': 'JBFqnCBsd6RMkjVDRZzb',    // Warm, Captivating Storyteller
+    };
+
+    const voiceId = voices[config.voice?.toLowerCase() || 'sarah'] || voices['sarah'];
 
     try {
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
@@ -35,187 +81,51 @@ export class ElevenLabsTTS implements TTSProvider {
         },
         body: JSON.stringify({
           text,
-          model_id: 'eleven_monolingual_v1',
+          model_id: 'eleven_flash_v2_5',
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
+            speed: 0.9,
           },
-          language_code: config.language || 'en-US',
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.text().catch(() => '');
-        if (response.status === 401) {
-          throw new Error('ElevenLabs API key is invalid. Check ELEVENLABS_API_KEY environment variable.');
-        } else if (response.status === 429) {
-          throw new Error('ElevenLabs API rate limit exceeded. Try again later.');
-        } else if (response.status === 400) {
-          throw new Error(`ElevenLabs API error: ${errorData || response.statusText}`);
-        }
-        throw new Error(`ElevenLabs API error: ${response.statusText}`);
+        const error = await response.text().catch(() => response.statusText);
+        throw new Error(`ElevenLabs API error: ${error}`);
       }
 
       return Buffer.from(await response.arrayBuffer());
     } catch (error) {
-      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
-        throw new Error('Network error: Cannot connect to ElevenLabs API. Check your internet connection.');
-      }
-      throw error;
+      throw new Error(`ElevenLabs synthesis failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   async getAvailableVoices(): Promise<string[]> {
-    const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-      headers: {
-        'xi-api-key': this.apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch voices: ${response.statusText}`);
-    }
-
-    const data = await response.json() as { voices: Array<{ voice_id: string; name: string }> };
-    return data.voices.map(v => v.name);
-  }
-
-  private getVoiceId(voiceName: string): string {
-    const voiceMap: { [key: string]: string } = {
-      bella: '21m00Tcm4TlvDq8ikWAM',
-      rachel: '21m00Tcm4TlvDq8ikWAM',
-      domi: '21m00Tcm4TlvDq8ikWAM',
-      antoni: '21m00Tcm4TlvDq8ikWAM',
-    };
-    return voiceMap[voiceName.toLowerCase()] || '21m00Tcm4TlvDq8ikWAM';
-  }
-}
-
-export class GoogleTTS implements TTSProvider {
-  private apiKey: string;
-
-  constructor(apiKey?: string) {
-    this.apiKey = apiKey || process.env.GOOGLE_API_KEY || '';
-    if (!this.apiKey) {
-      throw new Error('Google API key not found. Set GOOGLE_API_KEY environment variable.');
-    }
-  }
-
-  async synthesize(text: string, config: AudiobookConfig): Promise<Buffer> {
-    try {
-      const response = await fetch(
-        `https://texttospeech.googleapis.com/v1/text:synthesize?key=${this.apiKey}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            input: { text },
-            voice: {
-              languageCode: config.language || 'en-US',
-              name: config.voice || 'en-US-Neural2-A',
-            },
-            audioConfig: {
-              audioEncoding: 'MP3',
-              speakingRate: config.speed || 1.0,
-            },
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          throw new Error('Google API key is invalid. Check GOOGLE_API_KEY environment variable.');
-        } else if (response.status === 429) {
-          throw new Error('Google API rate limit exceeded. Try again later.');
-        }
-        throw new Error(`Google TTS API error: ${response.statusText}`);
-      }
-
-      const data = await response.json() as { audioContent: string };
-      return Buffer.from(data.audioContent, 'base64');
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
-        throw new Error('Network error: Cannot connect to Google TTS API. Check your internet connection.');
-      }
-      throw error;
-    }
-  }
-
-  async getAvailableVoices(): Promise<string[]> {
-    const response = await fetch(
-      `https://texttospeech.googleapis.com/v1/voices?key=${this.apiKey}`
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch voices: ${response.statusText}`);
-    }
-
-    const data = await response.json() as { voices: Array<{ name: string }> };
-    return data.voices.map(v => v.name);
-  }
-}
-
-export class MacTTS implements TTSProvider {
-  private voiceName: string = 'Samantha';
-
-  constructor(voiceName?: string) {
-    this.voiceName = voiceName || 'Samantha';
-  }
-
-  async synthesize(text: string, config: AudiobookConfig): Promise<Buffer> {
-    const tmpDir = os.tmpdir();
-    const textFile = path.join(tmpDir, `text-${Date.now()}.txt`);
-    const audioFile = path.join(tmpDir, `audio-${Date.now()}.aiff`);
-    const rate = config.speed ? Math.round(200 * config.speed) : 200;
-
-    try {
-      // Write text to file to avoid command-line escaping issues
-      fs.writeFileSync(textFile, text);
-
-      // Use system 'say' command to generate audio from file (AIFF is native to macOS)
-      await execAsync(`say -v "${this.voiceName}" -r ${rate} -f "${textFile}" -o "${audioFile}"`);
-
-      // Read the generated audio file
-      const audioBuffer = fs.readFileSync(audioFile);
-
-      // Clean up temp files
-      fs.unlinkSync(textFile);
-      fs.unlinkSync(audioFile);
-
-      return audioBuffer;
-    } catch (error) {
-      // Clean up on error
-      if (fs.existsSync(textFile)) fs.unlinkSync(textFile);
-      if (fs.existsSync(audioFile)) fs.unlinkSync(audioFile);
-      throw new Error(`TTS generation failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  async getAvailableVoices(): Promise<string[]> {
-    try {
-      const { stdout } = await execAsync('say -v ?');
-      return stdout
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => line.split(/\s+/)[0])
-        .filter(v => v.length > 0);
-    } catch {
-      return ['Samantha', 'Victoria', 'Alex'];
-    }
+    return ['sarah', 'bella', 'laura', 'charlie', 'george'];
   }
 }
 
 export class TTSConverter {
-  private provider: TTSProvider;
+  private provider: ElevenLabsTTS;
 
   constructor(config: AudiobookConfig) {
-    this.provider = this.getProvider(config.voiceProvider, config);
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'ElevenLabs API key required.\n' +
+        'Set: export ELEVENLABS_API_KEY="your_key"\n' +
+        'Get free key: https://elevenlabs.io'
+      );
+    }
+    this.provider = new ElevenLabsTTS(apiKey);
+  }
+
+  getProviderName(): string {
+    return this.provider.getName();
   }
 
   async convertToAudio(text: string, config: AudiobookConfig): Promise<AudioSegment> {
-    // Split text into chunks (avoid hitting token limits)
     const maxChunkSize = 5000;
     const chunks = this.chunkText(text, maxChunkSize);
 
@@ -225,7 +135,6 @@ export class TTSConverter {
     for (const chunk of chunks) {
       const audio = await this.provider.synthesize(chunk, config);
       audioBuffers.push(audio);
-      // Rough estimate: ~150 words per minute in speech = ~10 chars per second
       totalDuration += chunk.length / 10;
     }
 
@@ -233,6 +142,25 @@ export class TTSConverter {
       text,
       audio: Buffer.concat(audioBuffers),
       duration: totalDuration,
+      voice: config.voice,
+    };
+  }
+
+  async convertSegmentsToAudio(segments: Segment[], config: AudiobookConfig): Promise<AudioSegment> {
+    const parts: AudioPart[] = [];
+    for (const segment of segments) {
+      const chunks = this.chunkText(segment.text, 5000);
+      for (let i = 0; i < chunks.length; i++) {
+        const audio = await this.provider.synthesize(chunks[i], { ...config, voice: segment.voice });
+        const last = i === chunks.length - 1;
+        parts.push({ audio, pauseAfter: last ? segment.pauseAfter : 0 });
+      }
+    }
+    const joined = await joinAudioWithPauses(parts);
+    return {
+      text: segments.map(s => s.text).join('\n\n'),
+      audio: joined.audio,
+      duration: joined.duration,
       voice: config.voice,
     };
   }
@@ -248,39 +176,18 @@ export class TTSConverter {
     const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
 
     for (const sentence of sentences) {
-      if ((currentChunk + sentence).length > maxSize) {
-        if (currentChunk) chunks.push(currentChunk);
+      if ((currentChunk + sentence).length > maxSize && currentChunk) {
+        chunks.push(currentChunk.trim());
         currentChunk = sentence;
       } else {
         currentChunk += sentence;
       }
     }
 
-    if (currentChunk) chunks.push(currentChunk);
-    return chunks;
-  }
-
-  private getProvider(providerName: string, config: AudiobookConfig): TTSProvider {
-    switch (providerName) {
-      case 'elevenlabs':
-        try {
-          return new ElevenLabsTTS();
-        } catch {
-          console.warn('⚠️ ElevenLabs API key not found, falling back to system TTS');
-          return new MacTTS(config.voice);
-        }
-      case 'google':
-        try {
-          return new GoogleTTS();
-        } catch {
-          console.warn('⚠️ Google API key not found, falling back to system TTS');
-          return new MacTTS(config.voice);
-        }
-      case 'mac':
-        return new MacTTS(config.voice);
-      default:
-        // Default to Mac TTS (works without API keys)
-        return new MacTTS(config.voice);
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
     }
+
+    return chunks.length > 0 ? chunks : [text];
   }
 }
