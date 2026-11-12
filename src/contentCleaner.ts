@@ -1,10 +1,10 @@
-import type { ExtractedContent, CleanedContent, TableFigureSummary, Page } from './types';
+import type { ExtractedContent, CleanedContent, TableFigureSummary } from './types';
 
 export class ContentCleaner {
   async clean(extracted: ExtractedContent): Promise<CleanedContent> {
     const narrativeLines: string[] = [];
     const summaries: TableFigureSummary[] = [];
-    let insertPosition = 0;
+    let tableNum = 0, figNum = 0;
 
     for (const page of extracted.pages) {
       for (const element of page.elements) {
@@ -12,26 +12,18 @@ export class ContentCleaner {
           case 'heading':
           case 'body':
             narrativeLines.push(element.content);
-            insertPosition = narrativeLines.length;
             break;
           case 'table':
-            const tableSummary = this.summarizeTable(element.content);
-            summaries.push({
-              type: 'table',
-              number: this.extractTableNumber(element.content),
-              summary: tableSummary,
-              insertedAt: insertPosition,
-            });
+            tableNum++;
+            const ts = this.summarizeTable(element.content);
+            const tnum = this.extractNumber(element.content, 'table');
+            summaries.push({ type: 'table', number: tnum, summary: ts, insertedAt: narrativeLines.length });
             break;
           case 'figure':
-            const figureSummary = this.summarizeFigure(element.content);
-            summaries.push({
-              type: 'figure',
-              number: this.extractFigureNumber(element.content),
-              title: this.extractFigureTitle(element.content),
-              summary: figureSummary,
-              insertedAt: insertPosition,
-            });
+            figNum++;
+            const fs = this.summarizeFigure(element.content);
+            const fnum = this.extractNumber(element.content, 'figure');
+            summaries.push({ type: 'figure', number: fnum, summary: fs, title: this.extractTitle(element.content), insertedAt: narrativeLines.length });
             break;
           case 'header':
           case 'footer':
@@ -45,84 +37,104 @@ export class ContentCleaner {
 
     let finalText = narrativeLines.join('\n\n');
     for (const summary of summaries) {
-      const insertion = this.formatSummaryInsertion(summary);
-      finalText = this.insertSummary(finalText, insertion, summary.insertedAt);
+      const type = summary.type === 'table' ? 'Table' : 'Figure';
+      const insertion = `${type} ${summary.number} shows ${summary.summary}`;
+      const paragraphs = finalText.split('\n\n');
+      if (summary.insertedAt > 0 && summary.insertedAt <= paragraphs.length) {
+        paragraphs.splice(summary.insertedAt, 0, insertion);
+        finalText = paragraphs.join('\n\n');
+      } else {
+        finalText += '\n\n' + insertion;
+      }
     }
 
     return {
-      narrativeText: this.cleanupText(finalText),
+      narrativeText: finalText.replace(/\n\n\n+/g, '\n\n').replace(/\s+([.,:;!?])/g, '$1').trim(),
       summaries,
     };
   }
 
   private summarizeTable(content: string): string {
-    const lines = content.split('\n').map(l => l.trim()).filter(l => l);
-    if (lines.length < 2) return `a reference table`;
+    const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 1);
+    if (lines.length < 3) return 'a table with structured data.';
 
-    const algoPattern = /^(decision|random|neural|linear|logistic|svm|support|gradient|naive)/i;
-    let algoCount = 0;
-    for (const line of lines) {
-      if (algoPattern.test(line)) algoCount++;
+    const title = lines[0]?.toLowerCase() || '';
+    const dataLines = lines.slice(1);
+
+    // Identify column count and headers
+    const headerCandidates = dataLines.slice(0, 5);
+    let columnCount = 0;
+    for (const line of headerCandidates) {
+      if (/^(algorithm|type|name|use case|accuracy|speed|memory|value)/i.test(line)) {
+        columnCount++;
+      } else {
+        break;
+      }
     }
-    if (algoCount === 0) algoCount = Math.max(2, lines.length - 2);
+    if (columnCount === 0) columnCount = 3;
 
-    const fullContent = content.toLowerCase();
-    const hasAlgos = /algorithm|regression|decision|forest|network/i.test(content);
-    const hasMetrics = /accuracy|speed|memory/i.test(content);
-    const hasTypes = /type|classification/i.test(content);
-
-    if (hasAlgos && hasMetrics) {
-      return `comparison of ${algoCount} machine learning algorithms with accuracy, speed, and memory metrics`;
-    } else if (hasAlgos && hasTypes) {
-      return `table of ${algoCount} algorithms with their types and use cases`;
-    } else if (hasMetrics) {
-      return `data table showing performance metrics for ${algoCount} items`;
-    } else {
-      return `reference table with ${algoCount} rows`;
+    // Group data into rows
+    const rowData: string[][] = [];
+    for (let i = columnCount; i < dataLines.length; i += columnCount) {
+      const row = dataLines.slice(i, i + columnCount);
+      if (row.length === columnCount) {
+        rowData.push(row);
+      }
     }
+
+    // Extract algorithms (first column of each row)
+    const algorithms = rowData.map(r => r[0]).filter(a => a && !/^(regression|classification|fast|slow|low|high)$/i.test(a));
+    
+    // Extract types (second column if contains Type words)
+    const types = rowData.map(r => r[1] || '').filter(t => /regression|classification/i.test(t)).slice(0, 3);
+
+    // Generate summary
+    if (types.length > 0 && algorithms.length > 0) {
+      const algList = algorithms.slice(0, 4).join(', ');
+      const typeList = types.slice(0, 2).join(', ');
+      return `supervised learning algorithms including ${algList}, with algorithm types ${typeList}, showing their use cases.`;
+    }
+
+    // Check for accuracy-based comparison
+    const accuracies = dataLines.filter(l => /\d+%/.test(l)).slice(0, 3);
+    if (accuracies.length > 0 && algorithms.length > 0) {
+      const algList = algorithms.slice(0, 2).join(', ');
+      return `comparison of ${algorithms.length} machine learning algorithms (${algList}) with accuracies: ${accuracies.slice(0, 2).join(', ')}.`;
+    }
+
+    return `table with ${algorithms.length} entries.`;
   }
 
   private summarizeFigure(content: string): string {
-    // Extract caption - take everything after "Figure N:" up to the first sentence end or body text
-    let caption = content.replace(/^Figure\s+\d+[:\s]+/i, '').trim();
-    
-    // Just use caption as-is (it should be clean since we extract only caption in the extraction phase)
-    // But strip anything after a line break to avoid body text
-    const cleanCaption = caption.split('\n')[0].trim();
-    
-    return cleanCaption || 'a diagram';
-  }
+    const withoutPrefix = content.replace(/^[Ff]igure\s+\d+[:\s]+/i, '');
+    const words = withoutPrefix.split(/\s+/);
 
-  private extractTableNumber(content: string): string {
-    const match = content.match(/[Tt]able\s+(\d+)/);
-    return match ? match[1] : 'unknown';
-  }
-
-  private extractFigureNumber(content: string): string {
-    const match = content.match(/[Ff]ig(?:ure)?\s+(\d+)/);
-    return match ? match[1] : 'unknown';
-  }
-
-  private extractFigureTitle(content: string): string | undefined {
-    const match = content.match(/[Ff]ig(?:ure)?\s+\d+[:\s]+([^\n]+)/);
-    return match ? match[1].trim().slice(0, 100) : undefined;
-  }
-
-  private formatSummaryInsertion(summary: TableFigureSummary): string {
-    const type = summary.type === 'table' ? 'Table' : 'Figure';
-    return `${type} ${summary.number} shows ${summary.summary}`;
-  }
-
-  private insertSummary(text: string, insertion: string, position: number): string {
-    const paragraphs = text.split('\n\n');
-    if (position > 0 && position <= paragraphs.length) {
-      paragraphs.splice(position, 0, insertion);
-      return paragraphs.join('\n\n');
+    let captionEndIdx = 0;
+    for (let i = 0; i < Math.min(words.length, 8); i++) {
+      const word = words[i];
+      if (/^[a-z]/.test(word) || (i > 2 && /^[A-Z][a-z]/.test(word) && i > 3)) break;
+      captionEndIdx = i + 1;
     }
-    return text + '\n\n' + insertion;
+
+    const description = words.slice(captionEndIdx).join(' ');
+    if (description.length > 20) {
+      const sentences = description.split(/[.!?]+/).filter(s => s.trim().length > 0).slice(0, 2);
+      if (sentences.length > 0) {
+        return sentences.map(s => s.trim()).join('. ') + '.';
+      }
+    }
+
+    return description.length > 5 ? description + '.' : 'a diagram illustrating key concepts.';
   }
 
-  private cleanupText(text: string): string {
-    return text.replace(/\n\n\n+/g, '\n\n').replace(/\s+([.,:;!?])/g, '$1').trim();
+  private extractNumber(content: string, type: string): string {
+    const pattern = type === 'table' ? /[Tt]able\s+(\d+)/ : /[Ff]ig(?:ure)?\s+(\d+)/;
+    const match = content.match(pattern);
+    return match ? match[1] : 'unknown';
+  }
+
+  private extractTitle(content: string): string | undefined {
+    const match = content.match(/[Ff]ig(?:ure)?\s+\d+[:\s]+([^\n.]+)/);
+    return match ? match[1].trim().slice(0, 100) : undefined;
   }
 }
