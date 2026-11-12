@@ -79,7 +79,7 @@ Return the narrative text exactly as it should be read, removing:
 - Code blocks
 - Figure captions and table data (can be replaced with brief summaries)
 
-Output ONLY the cleaned narrative text, nothing else.`;
+Output ONLY the cleaned narrative text, nothing else. If the text contains no narrative at all, output nothing.`;
 
   try {
     const message = await client.messages.create({
@@ -88,12 +88,11 @@ Output ONLY the cleaned narrative text, nothing else.`;
       messages: [{ role: 'user', content: prompt }],
     });
 
-    const textContent = message.content.find(
-      (c: { type: string }) => c.type === 'text'
-    ) as { text: string } | undefined;
-    if (!textContent) throw new Error('No response');
-
-    const narrative = textContent.text.trim();
+    const narrative = message.content
+      .filter((c: { type: string }) => c.type === 'text')
+      .map((c: { text: string }) => c.text)
+      .join('')
+      .trim();
 
     return {
       narrativeText: narrative,

@@ -29,10 +29,10 @@ export async function processPdf(filePath: string, outputDir: string, voice: str
   const cleanedSections: string[] = [];
   for (let i = 0; i < sections.length; i++) {
     const cleaned = await cleanWithLLM(sections[i]);
-    if (!cleaned.narrativeText) throw new Error(`Section ${i + 1} cleaned to empty text`);
-    cleanedSections.push(cleaned.narrativeText);
     log(`   Section ${i + 1}/${sections.length}: ${sections[i].length} -> ${cleaned.narrativeText.length} chars`);
+    if (cleaned.narrativeText) cleanedSections.push(cleaned.narrativeText);
   }
+  if (cleanedSections.length === 0) throw new Error('No narrative text found in document');
 
   log(`   Voice: ${voice}`);
   log(`3️⃣  Generating premium audio with ${SECTION_PAUSE_SECONDS}s pauses between sections...`);

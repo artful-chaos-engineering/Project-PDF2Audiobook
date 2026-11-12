@@ -30,6 +30,7 @@ async function generateWithElevenLabs() {
   const voices = ['sarah', 'bella', 'laura', 'charlie', 'george'];
   let voiceIndex = 0;
 
+  let failures = 0;
   for (const file of inputFiles) {
     const voice = voices[voiceIndex % voices.length];
     voiceIndex++;
@@ -42,11 +43,15 @@ async function generateWithElevenLabs() {
       const secs = Math.floor(result.durationSeconds % 60);
       console.log(`✓ Generated: ${(result.sizeBytes / 1024 / 1024).toFixed(2)} MB | ${mins}m ${secs}s\n`);
     } catch (error) {
+      failures++;
       console.error(`✗ Failed: ${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
 
   console.log('='  .repeat(70));
+  if (failures > 0) {
+    throw new Error(`${failures} of ${inputFiles.length} file(s) failed`);
+  }
   console.log('\n✅ AUDIOBOOK GENERATION COMPLETE\n');
 }
 
