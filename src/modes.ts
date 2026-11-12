@@ -1,10 +1,22 @@
 const Anthropic = require('@anthropic-ai/sdk').default;
 
-export const MODES = ['narration', 'podcast', 'debate', 'summary'] as const;
+export const FORMATS = ['podcast', 'debate', 'deep-dive', 'summary'] as const;
+export type Format = typeof FORMATS[number];
+
+export const AUDIENCES = ['technical', 'managerial'] as const;
+export type Audience = typeof AUDIENCES[number];
+
+export const MODES = [
+  'narration',
+  'podcast',
+  'debate',
+  'summary',
+  ...AUDIENCES.flatMap(a => FORMATS.map(f => `${a}-${f}`)),
+] as const;
 export type Mode = typeof MODES[number];
 
 export const FEMALE_VOICE = 'sarah';
-export const MALE_VOICE = 'george';
+export const MALE_VOICE = 'brian';
 
 export const PAUSE_AFTER_HEADING = 2.0;
 export const PAUSE_AFTER_PARAGRAPH = 0.6;
@@ -23,12 +35,26 @@ interface Turn {
 
 const HEADING_RE = /^\d{1,2} [A-Z][^\n]{2,80}$/;
 
+const AUDIENCE_NOTES: Record<Audience, string> = {
+  technical: 'The listener is an engineer. Keep the specific mechanisms, terms, numbers and examples from the text.',
+  managerial: 'The listener is a manager. Focus on decisions, costs, risks, benefits and what to do about them, in plain language with little jargon.',
+};
+
 export function parseMode(value: string | undefined): Mode {
   const mode = (value || 'narration').toLowerCase();
   if (!(MODES as readonly string[]).includes(mode)) {
     throw new Error(`Unknown mode "${value}". Use one of: ${MODES.join(', ')}`);
   }
   return mode as Mode;
+}
+
+function audienceOf(mode: Mode): Audience | undefined {
+  return AUDIENCES.find(a => mode.startsWith(`${a}-`));
+}
+
+function formatOf(mode: Mode): Format {
+  const audience = audienceOf(mode);
+  return (audience ? mode.slice(audience.length + 1) : mode) as Format;
 }
 
 function splitHeading(section: string): { heading: string | null; body: string[] } {
@@ -119,6 +145,16 @@ ${text}
 
 Return ONLY a JSON array of objects like {"speaker": "A", "text": "..."}, with no other output.`;
 
+const DEEP_DIVE_PROMPT = (text: string) => `Turn this section of a technical document into a deep-dive conversation between two hosts.
+Speaker A asks the questions a careful listener would ask. Speaker B explains each idea in full, step by step, with the reasoning, examples and implications the text gives.
+Cover every substantive point in the section; do not skip any idea. Keep each turn focused, and do not add facts that are not in the text.
+Do not read headings or page numbers aloud.
+
+TEXT:
+${text}
+
+Return ONLY a JSON array of objects like {"speaker": "A", "text": "..."}, with no other output.`;
+
 const DEBATE_PROMPT = (text: string) => `Turn this section of a technical document into a debate between two speakers.
 Speaker A argues for the main claims of the text. Speaker B challenges them with the strongest counterarguments and open questions the text raises.
 Ground every point in the text; do not invent facts or statistics. Keep the turns short and direct.
@@ -140,12 +176,16 @@ Output ONLY the summary.`;
 export async function buildSegments(mode: Mode, sections: string[]): Promise<Segment[]> {
   if (mode === 'narration') return narrationSegments(sections);
 
-  if (mode === 'summary') {
+  const audience = audienceOf(mode);
+  const note = audience ? `${AUDIENCE_NOTES[audience]}\n\n` : '';
+  const format = formatOf(mode);
+
+  if (format === 'summary') {
     const segments: Segment[] = [];
     for (const section of sections) {
       const { heading } = splitHeading(section);
       if (heading) segments.push({ voice: FEMALE_VOICE, text: heading, pauseAfter: PAUSE_AFTER_HEADING });
-      const summary = await askClaude(SUMMARY_PROMPT(section));
+      const summary = await askClaude(note + SUMMARY_PROMPT(section));
       for (const paragraph of splitParagraphs(summary)) {
         segments.push({ voice: FEMALE_VOICE, text: paragraph, pauseAfter: PAUSE_AFTER_PARAGRAPH });
       }
@@ -153,11 +193,16 @@ export async function buildSegments(mode: Mode, sections: string[]): Promise<Seg
     return segments;
   }
 
-  const prompt = mode === 'podcast' ? PODCAST_PROMPT : DEBATE_PROMPT;
+  const prompts: Record<Exclude<Format, 'summary'>, (text: string) => string> = {
+    podcast: PODCAST_PROMPT,
+    debate: DEBATE_PROMPT,
+    'deep-dive': DEEP_DIVE_PROMPT,
+  };
+  const prompt = prompts[format];
   const sectionTurns: { heading: string | null; turns: Turn[] }[] = [];
   for (const section of sections) {
     const { heading } = splitHeading(section);
-    const turns = parseTurns(await askClaude(prompt(section)));
+    const turns = parseTurns(await askClaude(note + prompt(section)));
     sectionTurns.push({ heading, turns });
   }
   return dialogueSegments(sectionTurns);

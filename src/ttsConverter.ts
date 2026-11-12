@@ -68,6 +68,7 @@ export class ElevenLabsTTS implements TTSProvider {
       'laura': 'FGY2WhTYpPnrIDTdsKH5',     // Enthusiast, Quirky
       'charlie': 'IKne3meq5aSn9XLyUdCD',   // Deep, Confident, Energetic
       'george': 'JBFqnCBsd6RMkjVDRZzb',    // Warm, Captivating Storyteller
+      'brian': 'nPczCjzI2devNBz1zQrb',     // Deep, Resonant and Comforting
     };
 
     const voiceId = voices[config.voice?.toLowerCase() || 'sarah'] || voices['sarah'];
