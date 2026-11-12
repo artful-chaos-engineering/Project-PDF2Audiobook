@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Mark Vriesenga
+// SPDX-License-Identifier: MIT
+// Licensed under the MIT License. See the LICENSE file in the project root.
+
 import * as fs from 'fs';
 
 const Anthropic = require('@anthropic-ai/sdk').default;
@@ -64,22 +68,22 @@ export async function cleanWithLLM(fullText: string): Promise<CleaningResult> {
     throw new Error('ANTHROPIC_API_KEY required');
   }
 
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, timeout: 600000, maxRetries: 4 });
 
   const prompt = `Extract clean narrative text from this document for audiobook conversion.
 
 TEXT:
 ${fullText}
 
-Return the narrative text exactly as it should be read, removing:
+Keep every sentence of the narrative word for word. Do not summarize, shorten, paraphrase or reorder anything. Remove only:
 - Table of contents entries
 - Headers and footers
 - References section
 - Glossary entries
 - Code blocks
-- Figure captions and table data (can be replaced with brief summaries)
+- Figure captions and table data (replace each with one short sentence describing it)
 
-Output ONLY the cleaned narrative text, nothing else. If the text contains no narrative at all, output nothing.`;
+Output ONLY the cleaned text, nothing else. If the text contains no narrative at all, output nothing.`;
 
   try {
     const message = await client.messages.create({

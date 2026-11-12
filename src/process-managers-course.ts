@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Mark Vriesenga
+// SPDX-License-Identifier: MIT
+// Licensed under the MIT License. See the LICENSE file in the project root.
+
 import { PDFExtractor } from './pdfExtractor';
 import { ContentCleaner } from './contentCleaner';
 import { TTSConverter } from './ttsConverter';

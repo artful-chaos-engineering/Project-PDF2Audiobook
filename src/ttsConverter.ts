@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Mark Vriesenga
+// SPDX-License-Identifier: MIT
+// Licensed under the MIT License. See the LICENSE file in the project root.
+
 import type { AudioSegment, AudiobookConfig } from './types';
 import type { Segment } from './modes';
 import * as fs from 'fs';
@@ -86,7 +90,7 @@ export class ElevenLabsTTS implements TTSProvider {
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
-            speed: 0.9,
+            speed: config.speed ?? 0.9,
           },
         }),
       });
@@ -152,7 +156,7 @@ export class TTSConverter {
     for (const segment of segments) {
       const chunks = this.chunkText(segment.text, 5000);
       for (let i = 0; i < chunks.length; i++) {
-        const audio = await this.provider.synthesize(chunks[i], { ...config, voice: segment.voice });
+        const audio = await this.provider.synthesize(chunks[i], { ...config, voice: segment.voice, speed: segment.speed });
         const last = i === chunks.length - 1;
         parts.push({ audio, pauseAfter: last ? segment.pauseAfter : 0 });
       }
