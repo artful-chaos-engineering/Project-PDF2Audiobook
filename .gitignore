@@ -23,3 +23,7 @@ graft/.cache/
 /final-audiobook-output/
 /real-audiobook-output/
 /test-output/
+
+# Personal runtime settings written by the web app
+/voices.json
+/pronunciations.json

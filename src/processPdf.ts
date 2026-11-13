@@ -4,10 +4,10 @@
 
 import { PDFExtractor } from './pdfExtractor';
 import { cleanWithLLM, splitIntoSections } from './smartCleaner';
-import { TTSConverter } from './ttsConverter';
+import { TTSConverter, ttsModel, usesDialogueApi } from './ttsConverter';
 import * as path from 'path';
 import type { AudiobookConfig } from './types';
-import { buildSegments, Mode } from './modes';
+import { buildSegments, DEFAULT_VOICES, Mode, Presentation } from './modes';
 
 export interface ProcessResult {
   outputPath: string;
@@ -16,7 +16,13 @@ export interface ProcessResult {
   sizeBytes: number;
 }
 
-export async function processPdf(filePath: string, outputDir: string, mode: Mode, log: (msg: string) => void = console.log): Promise<ProcessResult> {
+export async function processPdf(
+  filePath: string,
+  outputDir: string,
+  mode: Mode,
+  log: (msg: string) => void = console.log,
+  presentation: Presentation = { voices: DEFAULT_VOICES, intro: '', outro: '' },
+): Promise<ProcessResult> {
   const fs = await import('fs');
   const outputFile = path.basename(filePath).replace(/\.pdf$/i, `-${mode}.mp3`);
 
@@ -38,16 +44,15 @@ export async function processPdf(filePath: string, outputDir: string, mode: Mode
   if (cleanedSections.length === 0) throw new Error('No narrative text found in document');
 
   log(`3️⃣  Building ${mode} script...`);
-  const segments = await buildSegments(mode, cleanedSections);
+  const segments = await buildSegments(mode, cleanedSections, log, presentation);
   log(`   ${segments.length} segments`);
   const ttsConfig: AudiobookConfig = {
     pdfPath: filePath,
     outputPath: path.join(outputDir, outputFile),
     voiceProvider: 'elevenlabs',
-    speed: 0.9,
   };
   const conv = new TTSConverter(ttsConfig);
-  log('4️⃣  Generating audio...');
+  log(`4️⃣  Generating audio with ${ttsModel()}${usesDialogueApi() ? ' (dialogue takes)' : ''}...`);
   const audio = await conv.convertSegmentsToAudio(segments, ttsConfig);
 
   fs.mkdirSync(outputDir, { recursive: true });

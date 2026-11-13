@@ -6,7 +6,8 @@ import { processPdf } from './processPdf';
 import { getConfig } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseMode } from './modes';
+import { parseMode, DEFAULT_VOICES } from './modes';
+import { readSettings } from './settings';
 
 async function generateWithElevenLabs() {
   const config = getConfig();
@@ -40,7 +41,9 @@ async function generateWithElevenLabs() {
     console.log(`Processing: ${file}`);
     console.log('-'.repeat(70));
     try {
-      const result = await processPdf(path.join(config.inputDir, file), config.outputDir, mode);
+      const texts = readSettings(mode);
+      const presentation = { voices: DEFAULT_VOICES, intro: texts.intro, outro: texts.outro };
+      const result = await processPdf(path.join(config.inputDir, file), config.outputDir, mode, console.log, presentation);
       const mins = Math.floor(result.durationSeconds / 60);
       const secs = Math.floor(result.durationSeconds % 60);
       console.log(`✓ Generated: ${(result.sizeBytes / 1024 / 1024).toFixed(2)} MB | ${mins}m ${secs}s\n`);

@@ -8,7 +8,12 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { processPdf } from './processPdf';
 import { getConfig } from './config';
-import { AUDIENCES, MODES, parseMode, Mode } from './modes';
+import { AUDIENCES, MODES, parseMode, Mode, DEFAULT_VOICES, Presentation } from './modes';
+import { VOICE_IDS, ElevenLabsTTS, ttsModel, voiceSettingsFor } from './ttsConverter';
+import { DEFAULT_TUNING, TUNING_RANGES, readTunings, tuningOf, validateTuning, writeTuning } from './voiceSettings';
+import { audioTagsEnabled } from './ttsConverter';
+import { readSettings, writeSettings, setEnvValue, MAX_TEXT_CHARS } from './settings';
+import { currentRules, parseRulesText, rulesToText, saveRules } from './pronunciation';
 
 const PORT = Number(process.env.PORT || 3000);
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -87,6 +92,20 @@ h2 { font-size:1.05rem; margin:0 0 12px; }
 label { display:block; font-weight:600; margin:14px 0 6px; }
 select { width:100%; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); font-size:1rem; }
 .hint { color:var(--muted); font-size:.9rem; margin-top:6px; }
+.tabs { display:flex; gap:8px; margin-top:12px; }
+.tab { padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--muted); font:inherit; cursor:pointer; }
+.tab.active { color:var(--fg); border-color:var(--accent); font-weight:600; }
+.slider { margin-top:14px; }
+.slider label { margin:0 0 4px; }
+.slider input[type=range] { width:100%; accent-color:var(--accent); }
+.slider .hint { margin-top:2px; }
+.tv { color:var(--accent); font-weight:600; margin-left:6px; }
+.check { display:flex; align-items:center; gap:8px; margin-top:14px; font-weight:400; }
+.check input { width:auto; }
+select, textarea, input[type=number] { width:100%; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); font:inherit; }
+textarea { resize:vertical; }
+.row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media (max-width: 520px) { .row2 { grid-template-columns:1fr; } }
 .actions { margin-top:16px; display:flex; gap:8px; }
 button { font:inherit; cursor:pointer; }
 .primary { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:10px 18px; font-size:1rem; }
@@ -127,7 +146,15 @@ audio { width:100%; margin-top:10px; }
 <button class="ghost" id="theme" aria-label="Toggle theme">Theme</button>
 </header>
 
+<nav class="tabs" aria-label="Sections">
+<button class="tab active" id="tabConvert" type="button">Convert</button>
+<button class="tab" id="tabTune" type="button">Voice tuning</button>
+<button class="tab" id="tabPron" type="button">Pronunciation</button>
+</nav>
+
 <div id="messages" aria-live="polite"></div>
+
+<div id="convertTab">
 
 <section class="card" id="form">
 <h2>New conversion</h2>
@@ -138,6 +165,15 @@ audio { width:100%; margin-top:10px; }
 <label for="mode">Mode</label>
 <select id="mode">${modeOptions()}</select>
 <div class="hint" id="modeDesc"></div>
+<div class="row2">
+<div><label for="speaker1">Speaker 1</label><select id="speaker1">${voiceOptions(DEFAULT_VOICES.speaker1)}</select></div>
+<div><label for="speaker2">Speaker 2</label><select id="speaker2">${voiceOptions(DEFAULT_VOICES.speaker2)}</select></div>
+</div>
+<label for="intro">Introduction (read at the start of the audiobook)</label>
+<textarea id="intro" rows="4" placeholder="Leave empty for no introduction"></textarea>
+<label for="outro">Outroduction (read at the end of the audiobook)</label>
+<textarea id="outro" rows="4" placeholder="Leave empty for no outroduction"></textarea>
+<div class="actions"><button class="ghost" id="saveText">Save introduction and outroduction for this mode</button></div>
 <div class="actions"><button class="primary" id="go" disabled>Convert</button></div>
 </section>
 
@@ -160,6 +196,70 @@ audio { width:100%; margin-top:10px; }
 <button class="ghost" id="refresh">Refresh</button>
 </div>
 <ul class="lib" id="lib" style="margin-top:12px"></ul>
+</section>
+</div>
+
+<section class="card" id="tuneTab" hidden>
+<h2>Voice tuning</h2>
+<label for="tuneVoice">Voice</label>
+<select id="tuneVoice">${voiceOptions('matilda')}</select>
+<p class="hint" id="tuneNote"></p>
+
+<div class="slider"><label for="t-stability">Stability <span class="tv" id="tv-stability"></span></label>
+<input type="range" id="t-stability" min="0" max="1" step="0.01">
+<p class="hint">Low gives more expression and variation between takes. High gives a steadier, flatter read.</p></div>
+
+<div class="slider"><label for="t-similarity">Similarity <span class="tv" id="tv-similarity"></span></label>
+<input type="range" id="t-similarity" min="0" max="1" step="0.01">
+<p class="hint">How closely the output follows the voice itself. High sounds more like the source; very high can add noise on weak recordings.</p></div>
+
+<div class="slider" id="styleRow"><label for="t-style">Style <span class="tv" id="tv-style"></span></label>
+<input type="range" id="t-style" min="0" max="1" step="0.01">
+<p class="hint">Exaggeration of the speaking style. Adds delay and can make the voice less stable.</p></div>
+
+<div class="slider" id="speedRow"><label for="t-speed">Speed <span class="tv" id="tv-speed"></span></label>
+<input type="range" id="t-speed" min="0.7" max="1.2" step="0.01">
+<p class="hint">Speaking rate. 1.00 is the voice's natural pace. Values far from 1.00 can lower quality.</p></div>
+
+<div class="slider"><label for="t-trim">Level trim <span class="tv" id="tv-trim"></span> dB</label>
+<input type="range" id="t-trim" min="-6" max="6" step="0.5">
+<p class="hint">Adds or removes loudness for this voice after the two voices are levelled. Capped so it never clips.</p></div>
+
+<div class="slider"><label for="t-pause">Pause length <span class="tv" id="tv-pause"></span>×</label>
+<input type="range" id="t-pause" min="0.5" max="2" step="0.05">
+<p class="hint">Scales the pauses that follow this voice's speech. Above 1 gives more room; below 1 speeds the conversation up.</p></div>
+
+<div class="slider" id="cloneRow"><label for="t-clone">Clone strength <span class="tv" id="tv-clone"></span></label>
+<input type="range" id="t-clone" min="0" max="1" step="0.01">
+<p class="hint">How closely a professional clone is applied. ElevenLabs recommends 0 for most uses and 0.5 if the clone sounds wrong. Only for eleven_v4.</p></div>
+
+<label for="t-norm">Text normalization</label>
+<select id="t-norm"><option value="auto">Auto: the system decides</option><option value="on">On: always spell out numbers and abbreviations</option><option value="off">Off: read the text as written</option></select>
+
+<label for="t-seed">Seed</label>
+<input type="number" id="t-seed" min="0" max="4294967295" placeholder="Empty = random">
+<p class="hint">The same seed and settings give the same result, as far as the service can manage. Empty means a new random result each time.</p>
+
+<label class="check"><input type="checkbox" id="tuneBoost"> Speaker boost (sharper match to the voice)</label>
+
+<label class="check"><input type="checkbox" id="audioTags"> Delivery tags in scripts ([laughs], [sighs], [whispers]). eleven_v4 only; applies to all voices.</label>
+
+<label for="previewText">Preview sentence</label>
+<textarea id="previewText" rows="6" maxlength="1000"></textarea>
+
+<div class="actions">
+<button class="ghost" id="tunePreview" type="button">Preview</button>
+<button class="primary" id="tuneSave" type="button">Save for this voice</button>
+<button class="ghost" id="tuneReset" type="button">Reset to default</button>
+</div>
+<audio id="tuneAudio" controls hidden style="width:100%;margin-top:12px"></audio>
+</section>
+
+<section class="card" id="pronTab" hidden>
+<h2>Pronunciation</h2>
+<p class="hint">One rule per line, written as <code>word = how it is said</code>. For example <code>SysML = sis em el</code>. Rules apply to every voice and every conversion. Saving sends them to ElevenLabs.</p>
+<textarea id="pronText" rows="10" placeholder="SysML = sis em el"></textarea>
+<div class="actions"><button class="primary" id="pronSave" type="button">Save pronunciations</button></div>
 </section>
 </main>
 <script>
@@ -193,10 +293,27 @@ function showMessage(kind, text) {
 function fmtTime(s) { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m + ':' + String(s % 60).padStart(2, '0'); }
 function fmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB'; }
 
+function loadSettings() {
+  fetch('/settings?mode=' + encodeURIComponent(mode.value))
+    .then(r => r.json())
+    .then(d => { $('intro').value = d.intro; $('outro').value = d.outro; })
+    .catch(() => showMessage('error', 'Could not load the introduction and outroduction.'));
+}
+async function saveSettings() {
+  try {
+    const res = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mode.value, intro: $('intro').value, outro: $('outro').value }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showMessage('info', 'Saved the introduction and outroduction for ' + mode.value + '.');
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  }
+}
 function updateDesc() { $('modeDesc').textContent = mode.selectedOptions[0]?.dataset.desc || ''; }
-mode.onchange = () => { updateDesc(); try { localStorage.setItem('mode', mode.value); } catch {} };
+mode.onchange = () => { updateDesc(); loadSettings(); try { localStorage.setItem('mode', mode.value); } catch {} };
 try { const m = localStorage.getItem('mode'); if (m && [...mode.options].some(o => o.value === m)) mode.value = m; } catch {}
 updateDesc();
+loadSettings();
 
 function setFile(f) {
   if (!f) return;
@@ -224,8 +341,10 @@ function renderJob(job) {
   });
   let pct = job.status === 'done' ? 100 : Math.max(0, job.step - 1) * 25;
   if (job.step === 2 && job.sectionsTotal) pct = 25 + 25 * job.sectionsDone / job.sectionsTotal;
+  if (job.step === 3 && job.sectionsTotal) pct = 50 + 25 * job.sectionsDone / job.sectionsTotal;
   $('bar').value = pct;
-  $('stepInfo').textContent = job.step === 2 && job.sectionsTotal ? 'Section ' + job.sectionsDone + ' of ' + job.sectionsTotal : job.status === 'running' ? 'Step ' + job.step + ' of 4' : '';
+  const label = job.step === 2 ? 'Section ' : job.step === 3 ? 'Script section ' : '';
+  $('stepInfo').textContent = label && job.sectionsTotal ? label + job.sectionsDone + ' of ' + job.sectionsTotal : job.status === 'running' ? 'Step ' + job.step + ' of 4' : '';
   const end = job.finishedAt || Date.now();
   $('elapsed').textContent = fmtTime((end - job.startedAt) / 1000);
   const log = $('log');
@@ -259,7 +378,7 @@ go.onclick = async () => {
   if (!file) return;
   go.disabled = true;
   try {
-    const res = await fetch('/convert', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name), 'X-Mode': mode.value }, body: file });
+    const res = await fetch('/convert', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name), 'X-Mode': mode.value, 'X-Speaker1': $('speaker1').value, 'X-Speaker2': $('speaker2').value }, body: file });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     showMessage('info', 'Started ' + file.name + '. It takes about as long as the audio plays, plus processing. You can leave this page and come back.');
@@ -304,6 +423,155 @@ async function loadLibrary(highlight) {
   }
 }
 $('refresh').onclick = () => loadLibrary();
+$('saveText').onclick = saveSettings;
+
+const TUNE_FIELDS = { stability: 't-stability', similarity_boost: 't-similarity', style: 't-style', speed: 't-speed', trim_db: 't-trim', pause_scale: 't-pause', clone_strength: 't-clone' };
+const TUNE_READOUTS = { stability: 'tv-stability', similarity_boost: 'tv-similarity', style: 'tv-style', speed: 'tv-speed', trim_db: 'tv-trim', pause_scale: 'tv-pause', clone_strength: 'tv-clone' };
+let tuneDefaults = null;
+let pronLoaded = false;
+
+function showTab(name) {
+  $('convertTab').hidden = name !== 'convert';
+  $('tuneTab').hidden = name !== 'tune';
+  $('pronTab').hidden = name !== 'pron';
+  $('tabConvert').classList.toggle('active', name === 'convert');
+  $('tabTune').classList.toggle('active', name === 'tune');
+  $('tabPron').classList.toggle('active', name === 'pron');
+  if (name === 'tune') { loadTuning(); loadGlobal(); }
+  if (name === 'pron' && !pronLoaded) loadPronunciations();
+}
+$('tabConvert').onclick = () => showTab('convert');
+$('tabTune').onclick = () => showTab('tune');
+$('tabPron').onclick = () => showTab('pron');
+
+function readTuneForm() {
+  const tuning = {};
+  for (const key of Object.keys(TUNE_FIELDS)) tuning[key] = Number($(TUNE_FIELDS[key]).value);
+  tuning.use_speaker_boost = $('tuneBoost').checked;
+  tuning.text_normalization = $('t-norm').value;
+  const seed = $('t-seed').value.trim();
+  tuning.seed = seed === '' ? null : Number(seed);
+  return tuning;
+}
+
+function fillTuneForm(tuning) {
+  for (const key of Object.keys(TUNE_FIELDS)) {
+    $(TUNE_FIELDS[key]).value = tuning[key];
+    $(TUNE_READOUTS[key]).textContent = Number(tuning[key]).toFixed(2);
+  }
+  $('tuneBoost').checked = !!tuning.use_speaker_boost;
+  $('t-norm').value = tuning.text_normalization || 'auto';
+  $('t-seed').value = tuning.seed === null || tuning.seed === undefined ? '' : tuning.seed;
+}
+
+function applyModelLimits(d) {
+  const speedStyle = d.supportsSpeedAndStyle;
+  for (const key of ['style', 'speed']) $(TUNE_FIELDS[key]).disabled = !speedStyle;
+  $('styleRow').style.opacity = speedStyle ? '1' : '.5';
+  $('speedRow').style.opacity = speedStyle ? '1' : '.5';
+  $('t-clone').disabled = !d.supportsCloneStrength;
+  $('cloneRow').style.opacity = d.supportsCloneStrength ? '1' : '.5';
+  $('tuneNote').textContent = 'Model ' + d.model + '. '
+    + (speedStyle ? 'All sliders apply to single-voice speech.' : 'No speed or style control on this model, so those two sliders are off.')
+    + (d.supportsCloneStrength ? '' : ' Clone strength applies only to eleven_v4.');
+}
+
+function loadTuning() {
+  const voice = $('tuneVoice').value;
+  fetch('/voice-settings?voice=' + encodeURIComponent(voice))
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      tuneDefaults = d.defaults;
+      fillTuneForm(d.tuning);
+      applyModelLimits(d);
+    })
+    .catch(err => showMessage('error', 'Could not load the voice settings: ' + err.message));
+}
+
+function loadGlobal() {
+  fetch('/global')
+    .then(r => r.json())
+    .then(d => { $('audioTags').checked = d.audioTags === 'on'; })
+    .catch(() => showMessage('error', 'Could not load the delivery-tag setting.'));
+}
+
+async function saveGlobal() {
+  try {
+    const res = await fetch('/global', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioTags: $('audioTags').checked ? 'on' : 'off' }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showMessage('info', 'Delivery tags are ' + data.audioTags + '. New scripts follow this setting.');
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  }
+}
+
+async function saveTuning() {
+  try {
+    const res = await fetch('/voice-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: $('tuneVoice').value, tuning: readTuneForm() }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showMessage('info', 'Saved the settings for ' + $('tuneVoice').value + '. New conversions use them.');
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  }
+}
+
+async function previewTuning() {
+  const button = $('tunePreview');
+  button.disabled = true;
+  try {
+    const res = await fetch('/voice-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: $('tuneVoice').value, tuning: readTuneForm(), text: $('previewText').value }) });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || res.statusText);
+    }
+    const audio = $('tuneAudio');
+    if (audio.src) URL.revokeObjectURL(audio.src);
+    audio.src = URL.createObjectURL(await res.blob());
+    audio.hidden = false;
+    audio.play().catch(() => {});
+  } catch (err) {
+    showMessage('error', 'Preview failed: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function loadPronunciations() {
+  fetch('/pronunciations')
+    .then(r => r.json())
+    .then(d => { $('pronText').value = d.text; pronLoaded = true; })
+    .catch(err => showMessage('error', 'Could not load the pronunciations: ' + err.message));
+}
+
+async function savePronunciations() {
+  const button = $('pronSave');
+  button.disabled = true;
+  try {
+    const res = await fetch('/pronunciations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('pronText').value }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    $('pronText').value = data.text;
+    showMessage('info', data.version_id ? 'Saved the pronunciations to ElevenLabs. They apply to the next conversion.' : 'Cleared the pronunciations.');
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('previewText').value = 'This is how I will sound when I read your audiobook. I keep a steady pace through the main ideas, pause at the end of each section, and slow down for numbers and names. Listen for warmth, clarity, and whether the voice still sounds natural over a longer passage, not only in one short sentence.';
+$('tuneVoice').onchange = loadTuning;
+$('tuneSave').onclick = saveTuning;
+$('tunePreview').onclick = previewTuning;
+$('tuneReset').onclick = () => { if (tuneDefaults) fillTuneForm(tuneDefaults); };
+$('audioTags').onchange = saveGlobal;
+$('pronSave').onclick = savePronunciations;
+for (const key of Object.keys(TUNE_FIELDS)) {
+  $(TUNE_FIELDS[key]).addEventListener('input', () => { $(TUNE_READOUTS[key]).textContent = Number($(TUNE_FIELDS[key]).value).toFixed(2); });
+}
 
 (async () => {
   loadLibrary();
@@ -343,16 +611,18 @@ function trackProgress(job: Job, msg: string) {
   console.log(msg);
   job.log.push(msg);
   const step = msg.match(/^([1-4])️?⃣/u);
-  if (step) job.step = Number(step[1]);
+  if (step) { job.step = Number(step[1]); job.sectionsDone = 0; }
   const total = msg.match(/of (\d+) sections/);
   if (total) job.sectionsTotal = Number(total[1]);
   const sec = msg.match(/Section (\d+)\/(\d+)/);
   if (sec) { job.sectionsDone = Number(sec[1]); job.sectionsTotal = Number(sec[2]); }
+  const script = msg.match(/Script (\d+)\/(\d+)/);
+  if (script) { job.sectionsDone = Number(script[1]); job.sectionsTotal = Number(script[2]); }
 }
 
-async function runJob(job: Job, inputPath: string) {
+async function runJob(job: Job, inputPath: string, presentation: Presentation) {
   try {
-    const result = await processPdf(inputPath, config.outputDir, job.mode, msg => trackProgress(job, msg));
+    const result = await processPdf(inputPath, config.outputDir, job.mode, msg => trackProgress(job, msg), presentation);
     const file = path.basename(result.outputPath);
     job.result = {
       url: '/output/' + encodeURIComponent(file),
@@ -372,6 +642,160 @@ async function runJob(job: Job, inputPath: string) {
   }
 }
 
+function voiceLabel(id: string): string {
+  return id.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function voiceOptions(selected: string): string {
+  return Object.keys(VOICE_IDS)
+    .map(v => `<option value="${v}"${v === selected ? ' selected' : ''}>${voiceLabel(v)}</option>`)
+    .join('');
+}
+
+function handleSettingsGet(url: URL, res: http.ServerResponse) {
+  let mode: Mode;
+  try {
+    mode = parseMode(url.searchParams.get('mode') || '');
+  } catch (err) {
+    return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+  sendJson(res, 200, readSettings(mode));
+}
+
+async function handleSettingsPost(req: http.IncomingMessage, res: http.ServerResponse) {
+  let body: Buffer;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    return sendJson(res, 413, { error: err instanceof Error ? err.message : String(err) });
+  }
+  let data: { mode?: unknown; intro?: unknown; outro?: unknown };
+  try {
+    data = JSON.parse(body.toString('utf-8'));
+  } catch {
+    return sendJson(res, 400, { error: 'Send the settings as JSON.' });
+  }
+  let mode: Mode;
+  try {
+    mode = parseMode(String(data.mode || ''));
+  } catch (err) {
+    return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+  if (typeof data.intro !== 'string' || typeof data.outro !== 'string') {
+    return sendJson(res, 400, { error: 'Introduction and outroduction must be text.' });
+  }
+  if (data.intro.length > MAX_TEXT_CHARS || data.outro.length > MAX_TEXT_CHARS) {
+    return sendJson(res, 400, { error: `Keep each text under ${MAX_TEXT_CHARS} characters.` });
+  }
+  writeSettings(mode, data.intro, data.outro);
+  sendJson(res, 200, readSettings(mode));
+}
+
+const MAX_PREVIEW_CHARS = 1000;
+const DEFAULT_PREVIEW = 'This is how I will sound when I read your audiobook. I keep a steady pace through the main ideas, pause at the end of each section, and slow down for numbers and names. Listen for warmth, clarity, and whether the voice still sounds natural over a longer passage, not only in one short sentence.';
+
+function voiceNameFrom(value: unknown): string {
+  const name = String(value || '').toLowerCase();
+  if (!VOICE_IDS[name]) throw new Error(`Unknown voice "${value}".`);
+  return name;
+}
+
+function supportsSpeedAndStyle(): boolean {
+  return Object.keys(voiceSettingsFor(ttsModel(), DEFAULT_TUNING)).includes('speed');
+}
+
+function handleVoiceSettingsGet(url: URL, res: http.ServerResponse) {
+  let voice: string;
+  try {
+    voice = voiceNameFrom(url.searchParams.get('voice'));
+  } catch (err) {
+    return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+  try {
+    sendJson(res, 200, {
+      voice,
+      tuning: tuningOf(voice, readTunings()),
+      defaults: DEFAULT_TUNING,
+      ranges: TUNING_RANGES,
+      model: ttsModel(),
+      supportsSpeedAndStyle: supportsSpeedAndStyle(),
+      supportsCloneStrength: ttsModel() === 'eleven_v4',
+    });
+  } catch (err) {
+    sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const body = await readBody(req);
+  try {
+    return JSON.parse(body.toString('utf-8'));
+  } catch {
+    throw new Error('Send the request as JSON.');
+  }
+}
+
+async function handleVoiceSettingsPost(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    const voice = voiceNameFrom(data.voice);
+    const tuning = validateTuning(data.tuning);
+    writeTuning(voice, tuning);
+    sendJson(res, 200, { voice, tuning });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleVoicePreview(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    const voice = voiceNameFrom(data.voice);
+    const tuning = validateTuning(data.tuning);
+    const text = typeof data.text === 'string' && data.text.trim() ? data.text.trim() : DEFAULT_PREVIEW;
+    if (text.length > MAX_PREVIEW_CHARS) throw new Error(`Keep the preview under ${MAX_PREVIEW_CHARS} characters.`);
+    const audio = await new ElevenLabsTTS().synthesize(text, { pdfPath: '', outputPath: '', voiceProvider: 'elevenlabs', voice }, { tuning });
+    res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length });
+    res.end(audio);
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+function handlePronunciationGet(res: http.ServerResponse) {
+  sendJson(res, 200, { text: rulesToText(currentRules()) });
+}
+
+async function handlePronunciationPost(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    if (typeof data.text !== 'string') throw new Error('Send the rules as text.');
+    const rules = parseRulesText(data.text);
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) throw new Error('ELEVENLABS_API_KEY is not set.');
+    const locator = await saveRules(rules, apiKey);
+    sendJson(res, 200, { text: rulesToText(rules), version_id: locator?.version_id ?? null });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+function handleGlobalGet(res: http.ServerResponse) {
+  sendJson(res, 200, { audioTags: audioTagsEnabled() ? 'on' : 'off', model: ttsModel() });
+}
+
+async function handleGlobalPost(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    if (data.audioTags !== 'on' && data.audioTags !== 'off') throw new Error('audioTags must be on or off.');
+    setEnvValue('AUDIO_TAGS', data.audioTags);
+    process.env.AUDIO_TAGS = data.audioTags;
+    sendJson(res, 200, { audioTags: data.audioTags });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function handleConvert(req: http.IncomingMessage, res: http.ServerResponse) {
   if (activeJob) return sendJson(res, 409, { error: `A conversion of ${activeJob.file} is already running. Wait for it to finish.` });
 
@@ -386,6 +810,10 @@ async function handleConvert(req: http.IncomingMessage, res: http.ServerResponse
     return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
   }
 
+  const speaker1 = String(req.headers['x-speaker1'] || DEFAULT_VOICES.speaker1);
+  const speaker2 = String(req.headers['x-speaker2'] || DEFAULT_VOICES.speaker2);
+  if (!VOICE_IDS[speaker1] || !VOICE_IDS[speaker2]) return sendJson(res, 400, { error: 'Choose a voice for Speaker 1 and Speaker 2.' });
+
   let body: Buffer;
   try {
     body = await readBody(req);
@@ -399,13 +827,15 @@ async function handleConvert(req: http.IncomingMessage, res: http.ServerResponse
 
   const inputPath = path.join(config.inputDir, baseName);
   fs.writeFileSync(inputPath, body);
+  const texts = readSettings(mode);
+  const presentation: Presentation = { voices: { speaker1, speaker2 }, intro: texts.intro, outro: texts.outro };
   const job: Job = {
     id: randomUUID(), file: baseName, mode, status: 'running', step: 0,
     sectionsDone: 0, sectionsTotal: 0, log: [], startedAt: Date.now(),
   };
   jobs.set(job.id, job);
   activeJob = job;
-  void runJob(job, inputPath);
+  void runJob(job, inputPath, presentation);
   sendJson(res, 202, { id: job.id });
 }
 
@@ -453,6 +883,15 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/convert') return void handleConvert(req, res);
   if (req.method === 'GET' && url.pathname === '/library') return handleLibrary(res);
+  if (req.method === 'GET' && url.pathname === '/settings') return handleSettingsGet(url, res);
+  if (req.method === 'GET' && url.pathname === '/voice-settings') return handleVoiceSettingsGet(url, res);
+  if (req.method === 'POST' && url.pathname === '/voice-settings') return void handleVoiceSettingsPost(req, res);
+  if (req.method === 'POST' && url.pathname === '/voice-preview') return void handleVoicePreview(req, res);
+  if (req.method === 'GET' && url.pathname === '/pronunciations') return handlePronunciationGet(res);
+  if (req.method === 'POST' && url.pathname === '/pronunciations') return void handlePronunciationPost(req, res);
+  if (req.method === 'GET' && url.pathname === '/global') return handleGlobalGet(res);
+  if (req.method === 'POST' && url.pathname === '/global') return void handleGlobalPost(req, res);
+  if (req.method === 'POST' && url.pathname === '/settings') return void handleSettingsPost(req, res);
   if (req.method === 'GET' && url.pathname === '/jobs/active') return sendJson(res, 200, activeJob);
   if (req.method === 'GET' && url.pathname.startsWith('/jobs/')) {
     const job = jobs.get(url.pathname.slice('/jobs/'.length));
