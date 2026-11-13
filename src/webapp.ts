@@ -17,7 +17,7 @@ import { assertLlmReady, LLM_PROVIDERS, llmModel, llmProvider, providerInfo, bas
 import { VOICE_SERVERS, voiceServerId } from './voiceServer';
 import { heygenKey, listHeyGenVoices, synthesizeHeyGen } from './heygen';
 import { readSettings, writeSettings, setEnvValue, MAX_TEXT_CHARS } from './settings';
-import { currentRules, parseRulesText, rulesToText, saveRules } from './pronunciation';
+import { currentRules, validateRules, saveRules } from './pronunciation';
 
 const PORT = Number(process.env.PORT || 3000);
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -107,6 +107,8 @@ h2 { font-size:1.05rem; margin:0 0 12px; }
 label { display:block; font-weight:600; margin:14px 0 6px; }
 select { width:100%; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); font-size:1rem; }
 .hint { color:var(--muted); font-size:.9rem; margin-top:6px; }
+.pron-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
+.pron-row label { flex:1; margin:0; }
 .tabs { display:flex; gap:8px; margin-top:12px; }
 .tab { padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--muted); font:inherit; cursor:pointer; }
 .tab.active { color:var(--fg); border-color:var(--accent); font-weight:600; }
@@ -275,9 +277,30 @@ audio { width:100%; margin-top:10px; }
 
 <section class="card" id="pronTab" hidden>
 <h2>Pronunciation</h2>
-<p class="hint">One rule per line, written as <code>word = how it is said</code>. For example <code>SysML = sis em el</code>. Rules apply to every voice and every conversion. Saving sends them to ElevenLabs.</p>
-<textarea id="pronText" rows="10" placeholder="SysML = sis em el"></textarea>
-<div class="actions"><button class="primary" id="pronSave" type="button">Save pronunciations</button></div>
+<p class="hint">Play each spelling and tick it only when it sounds right. Only ticked spellings are used in audio generation. New spellings start unticked.</p>
+<p class="hint" id="pronCount"></p>
+<div id="pronList"></div>
+<div class="row2" style="margin-top:14px">
+<div><label for="pronWord">Word as written</label><input type="text" id="pronWord" placeholder="SysML"></div>
+<div><label for="pronSay">How it is said</label><input type="text" id="pronSay" placeholder="sis em el"></div>
+</div>
+<div class="actions"><button class="ghost" id="pronAdd" type="button">Add spelling</button><button class="primary" id="pronSave" type="button">Save pronunciations</button></div>
+<audio id="pronAudio" controls hidden style="width:100%;margin-top:12px"></audio>
+
+<details style="margin-top:18px">
+<summary><strong>Guide: writing phonetic spellings</strong></summary>
+<ol class="hint" style="font-size:.95rem;line-height:1.5">
+<li>Write the word the way it sounds in your voice, using ordinary letters. Do not use IPA symbols here.</li>
+<li>Split the word into syllables with spaces: <code>SysML</code> becomes <code>sis em el</code>.</li>
+<li>Spell acronyms letter by letter, with a space between: <code>PDF</code> becomes <code>P D F</code>.</li>
+<li>Use common spellings for long vowels: <code>ee</code> (seen), <code>ay</code> (say), <code>oh</code> (go), <code>eye</code> (buy).</li>
+<li>Write numbers and symbols as words: <code>3.7x</code> becomes <code>three point seven times</code>.</li>
+<li>Use lowercase unless a capital changes the sound.</li>
+<li>Keep each spelling short. Play it, change one thing, and play again until it is right.</li>
+<li>Tick the box only after you have heard the spelling in your voice.</li>
+</ol>
+<p class="hint" style="font-size:.95rem">Examples: <code>Nguyen = win</code>, <code>Søren = SUR en</code>, <code>Zürich = TSUR ik</code>, <code>kubectl = cube control</code>, <code>nginx = engine ex</code>.</p>
+</details>
 </section>
 
 <section class="card" id="settingsTab" hidden>
@@ -734,28 +757,7 @@ async function previewTuning() {
   }
 }
 
-function loadPronunciations() {
-  fetch('/pronunciations')
-    .then(r => r.json())
-    .then(d => { $('pronText').value = d.text; pronLoaded = true; })
-    .catch(err => showMessage('error', 'Could not load the pronunciations: ' + err.message));
-}
 
-async function savePronunciations() {
-  const button = $('pronSave');
-  button.disabled = true;
-  try {
-    const res = await fetch('/pronunciations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('pronText').value }) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || res.statusText);
-    $('pronText').value = data.text;
-    showMessage('info', data.version_id ? 'Saved the pronunciations to ElevenLabs. They apply to the next conversion.' : 'Cleared the pronunciations.');
-  } catch (err) {
-    showMessage('error', 'Save failed: ' + err.message);
-  } finally {
-    button.disabled = false;
-  }
-}
 
 const PREVIEW_TEXTS = ${JSON.stringify(PREVIEW_CASES.map(c => c.text))};
 $('previewCase').onchange = () => { $('previewText').value = PREVIEW_TEXTS[Number($('previewCase').value)]; };
@@ -766,6 +768,98 @@ $('tuneSave').onclick = saveTuning;
 $('tunePreview').onclick = previewTuning;
 $('tuneReset').onclick = () => { if (tuneDefaults) fillTuneForm(tuneDefaults); };
 $('audioTags').onchange = saveGlobal;
+let pronRules = [];
+
+function renderPronList() {
+  const list = $('pronList');
+  list.innerHTML = '';
+  pronRules.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'pron-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.id = 'pron-ok-' + i;
+    box.checked = r.approved;
+    box.onchange = () => { pronRules[i].approved = box.checked; renderPronCount(); };
+    const label = document.createElement('label');
+    label.htmlFor = box.id;
+    label.className = 'check';
+    label.append(box, ' ' + r.word + '  →  ' + r.say);
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.className = 'ghost';
+    play.textContent = 'Play';
+    play.onclick = () => playPronunciation(r.say, play);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'ghost';
+    remove.textContent = 'Remove';
+    remove.onclick = () => { pronRules.splice(i, 1); renderPronList(); };
+    row.append(label, play, remove);
+    list.append(row);
+  });
+  renderPronCount();
+}
+
+function renderPronCount() {
+  $('pronCount').textContent = pronRules.filter(r => r.approved).length + ' of ' + pronRules.length + ' spellings ticked.';
+}
+
+async function playPronunciation(say, button) {
+  button.disabled = true;
+  try {
+    const res = await fetch('/pronunciations/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ say: say }) });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || res.statusText);
+    }
+    const audio = $('pronAudio');
+    if (audio.src) URL.revokeObjectURL(audio.src);
+    audio.src = URL.createObjectURL(await res.blob());
+    audio.hidden = false;
+    audio.play().catch(() => {});
+  } catch (err) {
+    showMessage('error', 'Play failed: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function loadPronunciations() {
+  fetch('/pronunciations')
+    .then(r => r.json())
+    .then(d => { pronRules = d.rules; pronLoaded = true; renderPronList(); })
+    .catch(err => showMessage('error', 'Could not load the pronunciations: ' + err.message));
+}
+
+$('pronAdd').onclick = () => {
+  const word = $('pronWord').value.trim();
+  const say = $('pronSay').value.trim();
+  if (!word || !say) { showMessage('error', 'Enter both the word and how it is said.'); return; }
+  if (pronRules.some(r => r.word.toLowerCase() === word.toLowerCase())) { showMessage('error', '"' + word + '" is already in the list.'); return; }
+  pronRules.push({ word: word, say: say, approved: false });
+  $('pronWord').value = '';
+  $('pronSay').value = '';
+  renderPronList();
+};
+
+async function savePronunciations() {
+  const button = $('pronSave');
+  button.disabled = true;
+  try {
+    const res = await fetch('/pronunciations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rules: pronRules }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    pronRules = data.rules;
+    renderPronList();
+    showMessage('info', data.approved > 0 ? 'Saved. ' + data.approved + ' ticked spelling(s) sent to ElevenLabs.' : 'Saved. No spellings are ticked, so none are applied.');
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 $('pronSave').onclick = savePronunciations;
 for (const key of Object.keys(TUNE_FIELDS)) {
   $(TUNE_FIELDS[key]).addEventListener('input', () => { $(TUNE_READOUTS[key]).textContent = Number($(TUNE_FIELDS[key]).value).toFixed(2); });
@@ -967,18 +1061,31 @@ async function handleVoicePreview(req: http.IncomingMessage, res: http.ServerRes
 }
 
 function handlePronunciationGet(res: http.ServerResponse) {
-  sendJson(res, 200, { text: rulesToText(currentRules()) });
+  sendJson(res, 200, { rules: currentRules() });
 }
 
 async function handlePronunciationPost(req: http.IncomingMessage, res: http.ServerResponse) {
   try {
     const data = await readJson(req);
-    if (typeof data.text !== 'string') throw new Error('Send the rules as text.');
-    const rules = parseRulesText(data.text);
+    const rules = validateRules(data.rules);
     const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) throw new Error('ELEVENLABS_API_KEY is not set.');
     const locator = await saveRules(rules, apiKey);
-    sendJson(res, 200, { text: rulesToText(rules), version_id: locator?.version_id ?? null });
+    sendJson(res, 200, { rules, version_id: locator?.version_id ?? null, approved: rules.filter(r => r.approved).length });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handlePronunciationPlay(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    const say = typeof data.say === 'string' ? data.say.trim() : '';
+    if (!say || say.length > 200) throw new Error('Enter the spelling to play, up to 200 characters.');
+    if (voiceServerId() !== 'elevenlabs') throw new Error('Play uses ElevenLabs. Choose ElevenLabs as the voice server to hear spellings.');
+    const audio = await new ElevenLabsTTS().synthesize(say, { pdfPath: '', outputPath: '', voiceProvider: 'elevenlabs', voice: DEFAULT_VOICES.speaker1 }, {});
+    res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length });
+    res.end(audio);
   } catch (err) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
   }
@@ -1213,6 +1320,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/voice-preview') return void handleVoicePreview(req, res);
   if (req.method === 'GET' && url.pathname === '/pronunciations') return handlePronunciationGet(res);
   if (req.method === 'POST' && url.pathname === '/pronunciations') return void handlePronunciationPost(req, res);
+  if (req.method === 'POST' && url.pathname === '/pronunciations/play') return void handlePronunciationPlay(req, res);
   if (req.method === 'GET' && url.pathname === '/global') return handleGlobalGet(res);
   if (req.method === 'POST' && url.pathname === '/global') return void handleGlobalPost(req, res);
   if (req.method === 'GET' && url.pathname === '/llm') return handleLlmGet(res);

@@ -13,6 +13,8 @@ const MAX_RULES = 100;
 export interface PronunciationRule {
   word: string;
   say: string;
+  // Only approved rules are sent to ElevenLabs. A new rule starts unapproved.
+  approved: boolean;
 }
 
 interface PronunciationState {
@@ -26,28 +28,31 @@ export interface DictionaryLocator {
   version_id: string;
 }
 
-export function parseRulesText(text: string): PronunciationRule[] {
-  const rules: PronunciationRule[] = [];
+export function validateRules(input: unknown): PronunciationRule[] {
+  if (!Array.isArray(input)) throw new Error('Send the rules as a list.');
+  if (input.length > MAX_RULES) throw new Error(`Keep to ${MAX_RULES} rules or fewer.`);
   const seen = new Set<string>();
-  text.split('\n').forEach((raw, index) => {
-    const line = raw.trim();
-    if (!line) return;
-    const at = line.indexOf('=');
-    if (at < 0) throw new Error(`Line ${index + 1}: write each rule as "word = how it is said".`);
-    const word = line.slice(0, at).trim();
-    const say = line.slice(at + 1).trim();
-    if (!word || !say) throw new Error(`Line ${index + 1}: both the word and how it is said are needed.`);
-    if (word.length > 100 || say.length > 200) throw new Error(`Line ${index + 1}: the word must be under 100 characters and the spoken form under 200.`);
-    if (seen.has(word.toLowerCase())) throw new Error(`Line ${index + 1}: "${word}" appears more than once.`);
+  return input.map((item, index) => {
+    const r = item as { word?: unknown; say?: unknown; approved?: unknown };
+    const word = typeof r.word === 'string' ? r.word.trim() : '';
+    const say = typeof r.say === 'string' ? r.say.trim() : '';
+    if (!word || !say) throw new Error(`Rule ${index + 1}: both the word and how it is said are needed.`);
+    if (word.length > 100 || say.length > 200) throw new Error(`Rule ${index + 1}: the word must be under 100 characters and the spoken form under 200.`);
+    if (seen.has(word.toLowerCase())) throw new Error(`"${word}" appears more than once.`);
     seen.add(word.toLowerCase());
-    rules.push({ word, say });
+    return { word, say, approved: r.approved === true };
   });
-  if (rules.length > MAX_RULES) throw new Error(`Keep to ${MAX_RULES} rules or fewer.`);
-  return rules;
 }
 
-export function rulesToText(rules: PronunciationRule[]): string {
-  return rules.map(r => `${r.word} = ${r.say}`).join('\n');
+export function parseRulesText(text: string): PronunciationRule[] {
+  const rules = text.split('\n').flatMap((raw, index) => {
+    const line = raw.trim();
+    if (!line) return [];
+    const at = line.indexOf('=');
+    if (at < 0) throw new Error(`Line ${index + 1}: write each rule as "word = how it is said".`);
+    return [{ word: line.slice(0, at).trim(), say: line.slice(at + 1).trim(), approved: false }];
+  });
+  return validateRules(rules);
 }
 
 function readState(): PronunciationState {
@@ -65,25 +70,24 @@ export function currentRules(): PronunciationRule[] {
   return readState().rules;
 }
 
-// Sends the rules to ElevenLabs as a dictionary version and records the version used in requests.
+// Saves every rule, and sends only the approved ones to ElevenLabs as a dictionary version.
 export async function saveRules(rules: PronunciationRule[], apiKey: string): Promise<DictionaryLocator | null> {
   const state = readState();
-  if (rules.length === 0) {
-    writeState({ rules: [] });
+  const approved = rules.filter(r => r.approved);
+  if (approved.length === 0) {
+    writeState({ rules, dictionary_id: state.dictionary_id });
     return null;
   }
-  const body = JSON.stringify({
-    rules: rules.map(r => ({ type: 'alias', string_to_replace: r.word, alias: r.say, case_sensitive: false, word_boundaries: true })),
-  });
+  const body = { rules: approved.map(r => ({ type: 'alias', string_to_replace: r.word, alias: r.say, case_sensitive: false, word_boundaries: true })) };
   const headers = { 'xi-api-key': apiKey, 'Content-Type': 'application/json' };
   let response: Response;
   if (state.dictionary_id) {
-    response = await fetch(`${API}/pronunciation-dictionaries/${state.dictionary_id}/set-rules`, { method: 'POST', headers, body });
+    response = await fetch(`${API}/pronunciation-dictionaries/${state.dictionary_id}/set-rules`, { method: 'POST', headers, body: JSON.stringify(body) });
   } else {
     response = await fetch(`${API}/pronunciation-dictionaries/add-from-rules`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ name: DICTIONARY_NAME, description: 'Pronunciations for PDF to Audiobook', rules: JSON.parse(body).rules }),
+      body: JSON.stringify({ name: DICTIONARY_NAME, description: 'Approved pronunciations for PDF to Audiobook', ...body }),
     });
   }
   if (!response.ok) {
@@ -98,6 +102,6 @@ export async function saveRules(rules: PronunciationRule[], apiKey: string): Pro
 
 export function activeLocators(): DictionaryLocator[] {
   const state = readState();
-  if (state.rules.length === 0 || !state.dictionary_id || !state.version_id) return [];
+  if (!state.dictionary_id || !state.version_id || !state.rules.some(r => r.approved)) return [];
   return [{ pronunciation_dictionary_id: state.dictionary_id, version_id: state.version_id }];
 }
