@@ -11,6 +11,8 @@ import * as path from 'path';
 import type { Writable } from 'stream';
 import { DEFAULT_TUNING, VoiceTuning, readTunings, sameTuning, tuningOf } from './voiceSettings';
 import { activeLocators } from './pronunciation';
+import { synthesizeHeyGen } from './heygen';
+import { voiceServerId } from './voiceServer';
 
 const API = 'https://api.elevenlabs.io/v1';
 const OUTPUT_FORMAT = 'mp3_44100_192';
@@ -535,7 +537,33 @@ export class TTSConverter {
     };
   }
 
+  // HeyGen speaks one piece of text at a time: it has no dialogue takes, no context text and no
+  // per-voice tuning, so each segment is rendered on its own and only the pauses and levelling apply.
+  private async convertWithHeyGen(segments: Segment[], config: AudiobookConfig): Promise<AudioSegment> {
+    const parts: AudioPart[] = [];
+    for (const segment of segments) {
+      const chunks = chunkText(segment.text, 9000);
+      for (const [c, chunk] of chunks.entries()) {
+        const audio = await synthesizeHeyGen(chunk, segment.voice);
+        const last = c === chunks.length - 1;
+        parts.push({
+          audio,
+          regions: [{ group: `${segment.voice}/heygen`, start: 0, end: Number.MAX_SAFE_INTEGER, trimDb: 0 }],
+          pauseAfter: last ? segment.pauseAfter : SENTENCE_GAP_SECONDS,
+        });
+      }
+    }
+    const joined = await assembleAudio(parts);
+    return {
+      text: segments.map(s => s.text).join('\n\n'),
+      audio: joined.audio,
+      duration: joined.duration,
+      voice: config.voice,
+    };
+  }
+
   async convertSegmentsToAudio(segments: Segment[], config: AudiobookConfig): Promise<AudioSegment> {
+    if (voiceServerId() === 'heygen') return this.convertWithHeyGen(segments, config);
     const parts: AudioPart[] = [];
     const dialogue = usesDialogueApi();
     const tunings = readTunings();

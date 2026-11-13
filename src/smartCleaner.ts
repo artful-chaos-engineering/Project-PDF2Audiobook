@@ -3,8 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project root.
 
 import * as fs from 'fs';
-
-const Anthropic = require('@anthropic-ai/sdk').default;
+import { complete } from './llm';
 
 export interface CleaningResult {
   narrativeText: string;
@@ -63,13 +62,6 @@ export function splitIntoSections(fullText: string): string[] {
 }
 
 export async function cleanWithLLM(fullText: string): Promise<CleaningResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY required');
-  }
-
-  const client = new Anthropic({ apiKey, timeout: 600000, maxRetries: 4 });
-
   const prompt = `Extract clean narrative text from this document for audiobook conversion.
 
 TEXT:
@@ -86,17 +78,7 @@ Keep every sentence of the narrative word for word. Do not summarize, shorten, p
 Output ONLY the cleaned text, nothing else. If the text contains no narrative at all, output nothing.`;
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-opus-5-5',
-      max_tokens: 16000,
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const narrative = message.content
-      .filter((c: { type: string }) => c.type === 'text')
-      .map((c: { text: string }) => c.text)
-      .join('')
-      .trim();
+    const narrative = await complete(prompt, 16000);
 
     return {
       narrativeText: narrative,

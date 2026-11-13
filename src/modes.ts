@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Licensed under the MIT License. See the LICENSE file in the project root.
 
-const Anthropic = require('@anthropic-ai/sdk').default;
+import { complete } from './llm';
 
 export const FORMATS = ['podcast', 'debate', 'deep-dive', 'summary'] as const;
 export type Format = typeof FORMATS[number];
@@ -122,21 +122,7 @@ function splitParagraphs(text: string): string[] {
 }
 
 async function askClaude(prompt: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY required');
-  const client = new Anthropic({ apiKey, timeout: 600000, maxRetries: 4 });
-  const message = await client.messages.create({
-    model: 'claude-sonnet-5-5',
-    max_tokens: 16000,
-    messages: [{ role: 'user', content: prompt }],
-  });
-  const text = message.content
-    .filter((c: { type: string }) => c.type === 'text')
-    .map((c: { text: string }) => c.text)
-    .join('')
-    .trim();
-  if (!text) throw new Error('Script model returned no text');
-  return text;
+  return complete(prompt, 16000);
 }
 
 function parseTurns(raw: string): Turn[] {

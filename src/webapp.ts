@@ -13,14 +13,28 @@ import { VOICE_IDS, ElevenLabsTTS, ttsModel, voiceSettingsFor } from './ttsConve
 import { DEFAULT_TUNING, TUNING_RANGES, readTunings, tuningOf, validateTuning, writeTuning } from './voiceSettings';
 import { audioTagsEnabled } from './ttsConverter';
 import { PREVIEW_CASES } from './previewCases';
+import { assertLlmReady, LLM_PROVIDERS, llmModel, llmProvider, providerInfo, baseUrlFor, keyFor, listModels } from './llm';
+import { VOICE_SERVERS, voiceServerId } from './voiceServer';
+import { heygenKey, listHeyGenVoices, synthesizeHeyGen } from './heygen';
 import { readSettings, writeSettings, setEnvValue, MAX_TEXT_CHARS } from './settings';
 import { currentRules, parseRulesText, rulesToText, saveRules } from './pronunciation';
 
 const PORT = Number(process.env.PORT || 3000);
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-if (!process.env.ELEVENLABS_API_KEY || !process.env.ANTHROPIC_API_KEY) {
-  console.error('ERROR: ELEVENLABS_API_KEY and ANTHROPIC_API_KEY must be set (see .env)');
+const voiceServer = (process.env.VOICE_PROVIDER || 'elevenlabs').toLowerCase();
+if (voiceServer === 'elevenlabs' && !process.env.ELEVENLABS_API_KEY) {
+  console.error('ERROR: ELEVENLABS_API_KEY must be set (see .env)');
+  process.exit(1);
+}
+if (voiceServer === 'heygen' && !process.env.HEYGEN_API_KEY) {
+  console.error('ERROR: HEYGEN_API_KEY must be set (see .env)');
+  process.exit(1);
+}
+try {
+  assertLlmReady();
+} catch (error) {
+  console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 }
 
@@ -151,6 +165,7 @@ audio { width:100%; margin-top:10px; }
 <button class="tab active" id="tabConvert" type="button">Convert</button>
 <button class="tab" id="tabTune" type="button">Voice tuning</button>
 <button class="tab" id="tabPron" type="button">Pronunciation</button>
+<button class="tab" id="tabSettings" type="button">Settings</button>
 </nav>
 
 <div id="messages" aria-live="polite"></div>
@@ -263,6 +278,44 @@ audio { width:100%; margin-top:10px; }
 <p class="hint">One rule per line, written as <code>word = how it is said</code>. For example <code>SysML = sis em el</code>. Rules apply to every voice and every conversion. Saving sends them to ElevenLabs.</p>
 <textarea id="pronText" rows="10" placeholder="SysML = sis em el"></textarea>
 <div class="actions"><button class="primary" id="pronSave" type="button">Save pronunciations</button></div>
+</section>
+
+<section class="card" id="settingsTab" hidden>
+<h2>Language model</h2>
+<p class="hint">Used to clean the text and write the scripts. Keys are read from and saved to <code>.env</code>.</p>
+<label for="llmProvider">Provider</label>
+<select id="llmProvider">${LLM_PROVIDERS.map(p => `<option value="${p.id}">${p.label}</option>`).join('')}</select>
+
+<div id="llmBaseRow" hidden>
+<label for="llmBase">Server address</label>
+<input type="text" id="llmBase" placeholder="http://localhost:1234/v1">
+</div>
+
+<div id="llmKeyRow" hidden>
+<label for="llmKey">API key</label>
+<p class="hint" id="llmKeyStatus"></p>
+<input type="password" id="llmKey" autocomplete="off" placeholder="Paste the key">
+<div class="actions" id="llmKeyActions" hidden><button class="ghost" id="llmKeyChange" type="button">Replace the saved key</button></div>
+</div>
+
+<label for="llmModel">Model</label>
+<select id="llmModel"><option value="">Load the models first</option></select>
+<div class="actions">
+<button class="ghost" id="llmLoad" type="button">Load models</button>
+<button class="primary" id="llmSave" type="button">Save language model</button>
+</div>
+
+<h2 style="margin-top:24px">Voice server</h2>
+<p class="hint">Produces the speech. ElevenLabs keeps every tuning and pronunciation feature. HeyGen speaks each line on its own, without dialogue takes or per-voice tuning.</p>
+<label for="voiceProvider">Voice server</label>
+<select id="voiceProvider">${VOICE_SERVERS.map(v => `<option value="${v.id}"${v.unavailable ? ' disabled' : ''}>${v.label}${v.unavailable ? ' (no speech output)' : ''}</option>`).join('')}</select>
+<p class="hint" id="voiceUnavailable"></p>
+<div id="voiceKeyRow" hidden>
+<label for="voiceKey">HeyGen API key</label>
+<p class="hint" id="voiceKeyStatus"></p>
+<input type="password" id="voiceKey" autocomplete="off" placeholder="Paste the key">
+</div>
+<div class="actions"><button class="primary" id="voiceSave" type="button">Save voice server</button></div>
 </section>
 </main>
 <script>
@@ -437,6 +490,9 @@ function showTab(name) {
   $('convertTab').hidden = name !== 'convert';
   $('tuneTab').hidden = name !== 'tune';
   $('pronTab').hidden = name !== 'pron';
+  $('settingsTab').hidden = name !== 'settings';
+  $('tabSettings').classList.toggle('active', name === 'settings');
+  if (name === 'settings') loadLlm();
   $('tabConvert').classList.toggle('active', name === 'convert');
   $('tabTune').classList.toggle('active', name === 'tune');
   $('tabPron').classList.toggle('active', name === 'pron');
@@ -446,6 +502,142 @@ function showTab(name) {
 $('tabConvert').onclick = () => showTab('convert');
 $('tabTune').onclick = () => showTab('tune');
 $('tabPron').onclick = () => showTab('pron');
+let llmState = null;
+
+function llmCurrentProvider() {
+  return (llmState && llmState.providers.find(p => p.id === $('llmProvider').value)) || null;
+}
+
+function renderLlmProvider() {
+  const p = llmCurrentProvider();
+  if (!p) return;
+  $('llmBaseRow').hidden = !p.hasBase;
+  $('llmBase').value = p.baseUrl || '';
+  $('llmKeyRow').hidden = !p.keyRequired && p.keyStored === null;
+  const stored = p.keyStored === true;
+  $('llmKey').hidden = stored;
+  $('llmKeyActions').hidden = !stored;
+  $('llmKey').value = '';
+  $('llmKeyStatus').textContent = p.keyStored === null ? 'This provider needs no key.' : (stored ? 'A key is already saved in .env.' : 'No key saved yet. Paste one below.');
+  $('llmModel').innerHTML = '<option value="">Load the models first</option>';
+}
+
+function loadLlm() {
+  fetch('/llm')
+    .then(r => r.json())
+    .then(d => {
+      llmState = d;
+      $('llmProvider').value = d.provider;
+      renderLlmProvider();
+      $('llmModel').innerHTML = '<option value="' + d.model + '">' + d.model + '</option>';
+      $('llmModel').value = d.model;
+    })
+    .catch(err => showMessage('error', 'Could not load the language model settings: ' + err.message));
+}
+
+async function loadLlmModels() {
+  const p = llmCurrentProvider();
+  const button = $('llmLoad');
+  button.disabled = true;
+  try {
+    const res = await fetch('/llm/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: $('llmProvider').value, apiKey: $('llmKey').value, baseUrl: $('llmBase').value }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const current = llmState && llmState.provider === $('llmProvider').value ? llmState.model : '';
+    const list = data.models.includes(current) || !current ? data.models : [current].concat(data.models);
+    $('llmModel').innerHTML = list.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+    if (current) $('llmModel').value = current;
+    showMessage('info', 'Loaded ' + data.models.length + ' models from ' + (p ? p.label : 'the provider') + '.');
+  } catch (err) {
+    showMessage('error', 'Could not load the models: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveLlm() {
+  const button = $('llmSave');
+  button.disabled = true;
+  try {
+    const res = await fetch('/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: $('llmProvider').value, model: $('llmModel').value, apiKey: $('llmKey').value, baseUrl: $('llmBase').value }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showMessage('info', 'Saved: ' + data.provider + ', ' + data.model + '. The key, if entered, is saved in .env.');
+    loadLlm();
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('llmProvider').onchange = () => { renderLlmProvider(); };
+$('llmKeyChange').onclick = () => { $('llmKey').hidden = false; $('llmKey').focus(); };
+$('llmLoad').onclick = loadLlmModels;
+$('llmSave').onclick = saveLlm;
+$('tabSettings').onclick = () => showTab('settings');
+let voiceState = null;
+
+function renderVoiceServer() {
+  const v = voiceState && voiceState.providers.find(p => p.id === $('voiceProvider').value);
+  if (!v) return;
+  $('voiceUnavailable').textContent = v.unavailable || '';
+  const needsKey = v.id === 'heygen';
+  $('voiceKeyRow').hidden = !needsKey;
+  if (needsKey) {
+    $('voiceKeyStatus').textContent = v.keyStored ? 'A HeyGen key is already saved in .env. Enter a new one only to replace it.' : 'No HeyGen key saved yet.';
+  }
+}
+
+function fillSpeakerSelects(voices, defaults) {
+  const options = voices.map(v => '<option value="' + v.id + '">' + v.name + '</option>').join('');
+  for (const [id, fallback] of [['speaker1', defaults[0]], ['speaker2', defaults[1]]]) {
+    const select = $(id);
+    const keep = select.value;
+    select.innerHTML = options;
+    select.value = voices.some(v => v.id === keep) ? keep : (voices.some(v => v.id === fallback) ? fallback : (voices[0] ? voices[0].id : ''));
+  }
+}
+
+function loadVoice() {
+  return fetch('/voice')
+    .then(r => r.json())
+    .then(d => {
+      voiceState = d;
+      $('voiceProvider').value = d.provider;
+      renderVoiceServer();
+      if (d.provider === 'heygen') {
+        if (d.error) showMessage('error', 'HeyGen voices: ' + d.error);
+        fillSpeakerSelects(d.voices, [d.voices[0] ? d.voices[0].id : '', d.voices[1] ? d.voices[1].id : '']);
+      } else {
+        fillSpeakerSelects(d.voices, ['matilda', 'mark']);
+      }
+    })
+    .catch(err => showMessage('error', 'Could not load the voice server settings: ' + err.message));
+}
+
+async function saveVoice() {
+  const button = $('voiceSave');
+  button.disabled = true;
+  try {
+    const res = await fetch('/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: $('voiceProvider').value, apiKey: $('voiceKey').value }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    $('voiceKey').value = '';
+    showMessage('info', 'Saved the voice server: ' + data.provider + '.');
+    loadVoice();
+  } catch (err) {
+    showMessage('error', 'Save failed: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('voiceProvider').onchange = renderVoiceServer;
+$('voiceSave').onclick = saveVoice;
+loadVoice();
+
+
 
 function readTuneForm() {
   const tuning = {};
@@ -756,6 +948,12 @@ async function handleVoiceSettingsPost(req: http.IncomingMessage, res: http.Serv
 async function handleVoicePreview(req: http.IncomingMessage, res: http.ServerResponse) {
   try {
     const data = await readJson(req);
+    if (voiceServerId() === 'heygen') {
+      const text = typeof data.text === 'string' && data.text.trim() ? data.text.trim() : DEFAULT_PREVIEW;
+      const audio = await synthesizeHeyGen(text, String(data.voice || ''));
+      res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length });
+      return void res.end(audio);
+    }
     const voice = voiceNameFrom(data.voice);
     const tuning = validateTuning(data.tuning);
     const text = typeof data.text === 'string' && data.text.trim() ? data.text.trim() : DEFAULT_PREVIEW;
@@ -802,6 +1000,122 @@ async function handleGlobalPost(req: http.IncomingMessage, res: http.ServerRespo
   }
 }
 
+function handleLlmGet(res: http.ServerResponse) {
+  const current = llmProvider();
+  sendJson(res, 200, {
+    provider: current.id,
+    model: llmModel(),
+    providers: LLM_PROVIDERS.map(p => ({
+      id: p.id,
+      label: p.label,
+      keyRequired: p.keyRequired,
+      keyStored: p.keyVar ? keyFor(p) !== '' : null,
+      hasBase: !!p.baseVar,
+      baseUrl: p.baseVar ? baseUrlFor(p) : '',
+    })),
+  });
+}
+
+async function handleLlmModels(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    const provider = providerInfo(String(data.provider || ''));
+    const apiKey = typeof data.apiKey === 'string' ? data.apiKey : undefined;
+    const baseUrl = typeof data.baseUrl === 'string' ? data.baseUrl : undefined;
+    const models = await listModels(provider.id, apiKey, baseUrl);
+    sendJson(res, 200, { models });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleLlmPost(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    const provider = providerInfo(String(data.provider || ''));
+    const model = typeof data.model === 'string' ? data.model.trim() : '';
+    if (!model) throw new Error('Choose a model.');
+    const keyAfterSave = typeof data.apiKey === 'string' && data.apiKey.trim() ? data.apiKey.trim() : keyFor(provider);
+    if (provider.keyRequired && !keyAfterSave) throw new Error(`Enter a ${provider.label} key before saving.`);
+    if (typeof data.apiKey === 'string' && data.apiKey.trim() && provider.keyVar) {
+      const value = data.apiKey.trim();
+      setEnvValue(provider.keyVar, value);
+      process.env[provider.keyVar] = value;
+    }
+    if (typeof data.baseUrl === 'string' && provider.baseVar) {
+      const value = data.baseUrl.trim();
+      setEnvValue(provider.baseVar, value);
+      process.env[provider.baseVar] = value;
+    }
+    setEnvValue('LLM_PROVIDER', provider.id);
+    setEnvValue('LLM_MODEL', model);
+    process.env.LLM_PROVIDER = provider.id;
+    process.env.LLM_MODEL = model;
+    sendJson(res, 200, { provider: provider.id, model });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function voiceChoices(): Promise<{ voices: { id: string; name: string }[]; error: string | null }> {
+  if (voiceServerId() === 'heygen') {
+    try {
+      const list = await listHeyGenVoices();
+      return { voices: list.map(v => ({ id: v.id, name: v.name })), error: list.length ? null : 'HeyGen returned no voices for this key.' };
+    } catch (err) {
+      return { voices: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  return { voices: Object.keys(VOICE_IDS).map(id => ({ id, name: voiceLabel(id) })), error: null };
+}
+
+async function handleVoiceGet(res: http.ServerResponse) {
+  let current: string;
+  try {
+    current = voiceServerId();
+  } catch {
+    current = String(process.env.VOICE_PROVIDER || 'elevenlabs');
+  }
+  const choices = await voiceChoices();
+  sendJson(res, 200, {
+    provider: current,
+    providers: VOICE_SERVERS.map(v => ({
+      id: v.id,
+      label: v.label,
+      unavailable: v.unavailable,
+      keyStored: v.keyVar ? !!(process.env[v.keyVar] ?? '').trim() : null,
+    })),
+    voices: choices.voices,
+    error: choices.error,
+  });
+}
+
+async function handleVoicePost(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const data = await readJson(req);
+    const id = String(data.provider || '');
+    const info = VOICE_SERVERS.find(v => v.id === id);
+    if (!info) throw new Error(`Unknown voice server "${id}".`);
+    if (info.unavailable) throw new Error(`${info.label} cannot be the voice server: ${info.unavailable}`);
+    if (id === 'heygen') {
+      const typed = typeof data.apiKey === 'string' ? data.apiKey.trim() : '';
+      if (typed) {
+        setEnvValue('HEYGEN_API_KEY', typed);
+        process.env.HEYGEN_API_KEY = typed;
+      }
+      if (!heygenKey()) throw new Error('Enter the HeyGen key before saving.');
+    }
+    if (id === 'elevenlabs' && !(process.env.ELEVENLABS_API_KEY ?? '').trim()) {
+      throw new Error('ELEVENLABS_API_KEY is not set. Enter it in .env first.');
+    }
+    setEnvValue('VOICE_PROVIDER', id);
+    process.env.VOICE_PROVIDER = id;
+    sendJson(res, 200, { provider: id });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function handleConvert(req: http.IncomingMessage, res: http.ServerResponse) {
   if (activeJob) return sendJson(res, 409, { error: `A conversion of ${activeJob.file} is already running. Wait for it to finish.` });
 
@@ -818,7 +1132,11 @@ async function handleConvert(req: http.IncomingMessage, res: http.ServerResponse
 
   const speaker1 = String(req.headers['x-speaker1'] || DEFAULT_VOICES.speaker1);
   const speaker2 = String(req.headers['x-speaker2'] || DEFAULT_VOICES.speaker2);
-  if (!VOICE_IDS[speaker1] || !VOICE_IDS[speaker2]) return sendJson(res, 400, { error: 'Choose a voice for Speaker 1 and Speaker 2.' });
+  if (voiceServerId() === 'heygen') {
+    if (!speaker1 || !speaker2) return sendJson(res, 400, { error: 'Choose a voice for Speaker 1 and Speaker 2.' });
+  } else if (!VOICE_IDS[speaker1] || !VOICE_IDS[speaker2]) {
+    return sendJson(res, 400, { error: 'Choose a voice for Speaker 1 and Speaker 2.' });
+  }
 
   let body: Buffer;
   try {
@@ -897,6 +1215,11 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/pronunciations') return void handlePronunciationPost(req, res);
   if (req.method === 'GET' && url.pathname === '/global') return handleGlobalGet(res);
   if (req.method === 'POST' && url.pathname === '/global') return void handleGlobalPost(req, res);
+  if (req.method === 'GET' && url.pathname === '/llm') return handleLlmGet(res);
+  if (req.method === 'GET' && url.pathname === '/voice') return void handleVoiceGet(res);
+  if (req.method === 'POST' && url.pathname === '/voice') return void handleVoicePost(req, res);
+  if (req.method === 'POST' && url.pathname === '/llm/models') return void handleLlmModels(req, res);
+  if (req.method === 'POST' && url.pathname === '/llm') return void handleLlmPost(req, res);
   if (req.method === 'POST' && url.pathname === '/settings') return void handleSettingsPost(req, res);
   if (req.method === 'GET' && url.pathname === '/jobs/active') return sendJson(res, 200, activeJob);
   if (req.method === 'GET' && url.pathname.startsWith('/jobs/')) {

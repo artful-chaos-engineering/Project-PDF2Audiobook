@@ -7,17 +7,25 @@ import { getConfig } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseMode, DEFAULT_VOICES } from './modes';
+import { assertLlmReady } from './llm';
 import { readSettings } from './settings';
 
 async function generateWithElevenLabs() {
   const config = getConfig();
 
-  if (!process.env.ELEVENLABS_API_KEY) {
+  const voiceServer = (process.env.VOICE_PROVIDER || 'elevenlabs').toLowerCase();
+  if (voiceServer === 'elevenlabs' && !process.env.ELEVENLABS_API_KEY) {
     console.error('❌ ELEVENLABS_API_KEY not set');
     process.exit(1);
   }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('❌ ANTHROPIC_API_KEY not set');
+  if (voiceServer === 'heygen' && !process.env.HEYGEN_API_KEY) {
+    console.error('❌ HEYGEN_API_KEY not set');
+    process.exit(1);
+  }
+  try {
+    assertLlmReady();
+  } catch (error) {
+    console.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 
