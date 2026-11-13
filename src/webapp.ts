@@ -12,6 +12,7 @@ import { AUDIENCES, MODES, parseMode, Mode, DEFAULT_VOICES, Presentation } from 
 import { VOICE_IDS, ElevenLabsTTS, ttsModel, voiceSettingsFor } from './ttsConverter';
 import { DEFAULT_TUNING, TUNING_RANGES, readTunings, tuningOf, validateTuning, writeTuning } from './voiceSettings';
 import { audioTagsEnabled } from './ttsConverter';
+import { PREVIEW_CASES } from './previewCases';
 import { readSettings, writeSettings, setEnvValue, MAX_TEXT_CHARS } from './settings';
 import { currentRules, parseRulesText, rulesToText, saveRules } from './pronunciation';
 
@@ -244,7 +245,9 @@ audio { width:100%; margin-top:10px; }
 
 <label class="check"><input type="checkbox" id="audioTags"> Delivery tags in scripts ([laughs], [sighs], [whispers]). eleven_v4 only; applies to all voices.</label>
 
-<label for="previewText">Preview sentence</label>
+<label for="previewCase">Test case</label>
+<select id="previewCase">${PREVIEW_CASES.map((c, i) => `<option value="${i}">${i + 1}. ${c.name}</option>`).join('')}</select>
+<label for="previewText">Preview text</label>
 <textarea id="previewText" rows="6" maxlength="1000"></textarea>
 
 <div class="actions">
@@ -562,7 +565,10 @@ async function savePronunciations() {
   }
 }
 
-$('previewText').value = 'This is how I will sound when I read your audiobook. I keep a steady pace through the main ideas, pause at the end of each section, and slow down for numbers and names. Listen for warmth, clarity, and whether the voice still sounds natural over a longer passage, not only in one short sentence.';
+const PREVIEW_TEXTS = ${JSON.stringify(PREVIEW_CASES.map(c => c.text))};
+$('previewCase').onchange = () => { $('previewText').value = PREVIEW_TEXTS[Number($('previewCase').value)]; };
+$('previewCase').value = '1';
+$('previewText').value = PREVIEW_TEXTS[1];
 $('tuneVoice').onchange = loadTuning;
 $('tuneSave').onclick = saveTuning;
 $('tunePreview').onclick = previewTuning;
